@@ -209,6 +209,12 @@ node_modules/
 # Next.js build output
 .next/
 
+# Local database and environment
+*.db
+*.db-journal
+.env
+*.tsbuildinfo
+
 # Ruff stuff:
 .ruff_cache/
 

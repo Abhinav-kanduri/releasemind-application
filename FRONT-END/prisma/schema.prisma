@@ -1,0 +1,142 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "sqlite"
+  url = env("DATABASE_URL")
+}
+
+model ProductSpace {
+  id String @id @default(cuid())
+  name String
+  projects Project[]
+  createdAt DateTime @default(now())
+}
+model Project {
+  id String @id @default(cuid())
+  productSpaceId String
+  productSpace ProductSpace @relation(fields: [productSpaceId], references: [id])
+  key String @unique
+  name String
+  releases Release[]
+  features Feature[]
+  stories UserStory[]
+  generations AiGeneration[]
+  createdAt DateTime @default(now())
+}
+model Release {
+  id String @id @default(cuid())
+  productSpaceId String
+  projectId String
+  project Project @relation(fields: [projectId], references: [id])
+  name String
+  version String?
+  description String?
+  status String @default("DRAFT")
+  owner String?
+  startDate DateTime?
+  targetDate DateTime?
+  archivedAt DateTime?
+  features Feature[]
+  stories UserStory[]
+  generations AiGeneration[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([projectId])
+}
+model Feature {
+  id String @id @default(cuid())
+  productSpaceId String
+  projectId String
+  releaseId String?
+  project Project @relation(fields: [projectId], references: [id])
+  release Release? @relation(fields: [releaseId], references: [id])
+  key String @unique
+  title String
+  description String @default("")
+  problemStatement String @default("")
+  businessValue String @default("")
+  functionalRequirements String @default("[]")
+  nonFunctionalRequirements String @default("[]")
+  dependencies String @default("[]")
+  risks String @default("[]")
+  assumptions String @default("[]")
+  status String @default("DRAFT")
+  priority String @default("MEDIUM")
+  owner String?
+  source String @default("AI")
+  aiGenerationId String? @unique
+  generation AiGeneration? @relation("SavedFeature", fields: [aiGenerationId], references: [id])
+  criteria AcceptanceCriterion[]
+  stories UserStory[]
+  archivedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([projectId])
+  @@index([releaseId])
+}
+model UserStory {
+  id String @id @default(cuid())
+  productSpaceId String
+  projectId String
+  featureId String
+  releaseId String?
+  project Project @relation(fields: [projectId], references: [id])
+  feature Feature @relation(fields: [featureId], references: [id], onDelete: Restrict)
+  release Release? @relation(fields: [releaseId], references: [id])
+  key String @unique
+  title String
+  persona String @default("")
+  goal String @default("")
+  benefit String @default("")
+  description String @default("")
+  status String @default("DRAFT")
+  priority String @default("MEDIUM")
+  storyPoints Int?
+  assignee String?
+  sprintId String?
+  source String @default("AI")
+  aiGenerationId String?
+  criteria AcceptanceCriterion[]
+  archivedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([featureId])
+  @@index([projectId])
+  @@index([releaseId])
+}
+model AcceptanceCriterion {
+  id String @id @default(cuid())
+  featureId String?
+  userStoryId String?
+  feature Feature? @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  userStory UserStory? @relation(fields: [userStoryId], references: [id], onDelete: Cascade)
+  givenText String?
+  whenText String?
+  thenText String?
+  criteriaText String?
+  sortOrder Int @default(0)
+  completed Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model AiGeneration {
+  id String @id @default(cuid())
+  productSpaceId String
+  projectId String
+  releaseId String?
+  featureId String?
+  project Project @relation(fields: [projectId], references: [id])
+  release Release? @relation(fields: [releaseId], references: [id])
+  generationType String
+  inputText String @default("")
+  sourceSnapshot String @default("{}")
+  generatedContent String
+  provider String @default("DETERMINISTIC_DEMO")
+  model String @default("local")
+  status String @default("GENERATED")
+  savedFeature Feature? @relation("SavedFeature")
+  createdAt DateTime @default(now())
+  savedAt DateTime?
+  @@index([featureId])
+}
