@@ -1,0 +1,1 @@
+import { AppShell } from "@/components/layout/app-shell";import { ChatWorkspace } from "@/components/assistant/chat-workspace";export default function Page(){return <AppShell><ChatWorkspace/></AppShell>}

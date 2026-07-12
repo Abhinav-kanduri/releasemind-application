@@ -1,0 +1,2 @@
+"use client";import { useEffect } from "react";import { AppSidebar } from "./app-sidebar";import { TopHeader } from "./top-header";import { useAppStore } from "@/stores/app-store";
+export function AppShell({children}:{children:React.ReactNode}){const theme=useAppStore(s=>s.theme);useEffect(()=>{document.documentElement.classList.toggle("dark",theme==="dark"||(theme==="system"&&matchMedia("(prefers-color-scheme:dark)").matches))},[theme]);return <div className="shell"><AppSidebar/><div className="main"><TopHeader/>{children}</div></div>}
