@@ -1,0 +1,10 @@
+services:
+  api:
+    build: ./backend
+    env_file: ./backend/.env
+    ports: ["8000:8000"]
+  worker:
+    build: ./backend
+    env_file: ./backend/.env
+    command: ["python", "-m", "app.workers.runner"]
+
