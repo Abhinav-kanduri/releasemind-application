@@ -1,1 +1,40 @@
-{"name":"releaselens-ai","version":"1.0.0","private":true,"scripts":{"dev":"next dev","build":"next build","start":"next start","lint":"eslint .","typecheck":"tsc --noEmit","db:migrate":"prisma migrate dev","db:deploy":"prisma migrate deploy"},"dependencies":{"@hookform/resolvers":"^3.9.1","@prisma/client":"^6.19.0","lucide-react":"^0.468.0","next":"^15.5.20","react":"^19.0.0","react-dom":"^19.0.0","react-hook-form":"^7.54.2","recharts":"^2.15.0","zod":"^3.24.1","zustand":"^5.0.3"},"devDependencies":{"@types/node":"^22.10.5","@types/react":"^19.0.3","@types/react-dom":"^19.0.2","autoprefixer":"^10.5.2","eslint":"^9.17.0","eslint-config-next":"^15.5.20","postcss":"^8.4.49","prettier":"^3.4.2","prisma":"^6.19.0","tailwindcss":"^3.4.17","typescript":"^5.7.2"}}
+{
+  "name": "releaselens-ai",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/assistant-sanitizer.test.mjs tests/assistant-ui-contract.test.mjs",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^3.9.1",
+    "@prisma/client": "^6.19.0",
+    "lucide-react": "^0.468.0",
+    "next": "^15.5.20",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-hook-form": "^7.54.2",
+    "recharts": "^2.15.0",
+    "zod": "^3.24.1",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "autoprefixer": "^10.5.2",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "^15.5.20",
+    "postcss": "^8.4.49",
+    "prettier": "^3.4.2",
+    "prisma": "^6.19.0",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2"
+  }
+}
