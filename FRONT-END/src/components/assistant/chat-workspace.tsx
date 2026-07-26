@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, Bot, Copy } from "lucide-react";
-import { useAppStore } from "@/stores/app-store";
+import { useWorkspaceContext } from "@/workspace-context";
 import { AssistantHeader } from "./assistant-header";
 import { AssistantMessage } from "./assistant-message";
 import { ChatComposer } from "./chat-composer";
@@ -33,9 +33,13 @@ const responseStages = [
 ];
 
 export function ChatWorkspace() {
-  const productSpaceId = useAppStore((state) => state.productSpaceId),
-    projectId = useAppStore((state) => state.projectId),
-    environment = useAppStore((state) => state.environment);
+  const productSpaceId = useWorkspaceContext(
+      (state) => state.productSpaceId,
+    ),
+    projectId = useWorkspaceContext((state) => state.projectId),
+    environment =
+      useWorkspaceContext((state) => state.environment?.name) ||
+      "All environments";
   const [input, setInput] = useState(""),
     [sending, setSending] = useState(false),
     [conversationLoading, setConversationLoading] = useState(false),
@@ -64,6 +68,11 @@ export function ChatWorkspace() {
   const loadConversations = useCallback(async () => {
     const version = ++requestVersionRef.current;
     setConversations([]);
+    if (!productSpaceId || !projectId) {
+      setProjectName("Select a Project");
+      setError("");
+      return;
+    }
     try {
       const query = new URLSearchParams();
       if (productSpaceId) query.set("productSpaceId", productSpaceId);
@@ -236,6 +245,10 @@ export function ChatWorkspace() {
   const ask = async (question: string) => {
     const value = question.trim();
     if (!value || sendingRef.current) return;
+    if (!productSpaceId || !projectId) {
+      setError("Select a Product Space and Project in Workspace Context.");
+      return;
+    }
     sendingRef.current = true;
     nearBottomRef.current = true;
     setShowJumpToLatest(false);

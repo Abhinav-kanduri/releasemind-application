@@ -17,38 +17,57 @@ const uuid =
 
 export async function GET(request: NextRequest) {
   try {
+    const requested = request.nextUrl.searchParams.get("projectId") || "";
+    const requestedSpace =
+      request.nextUrl.searchParams.get("productSpaceId") || "";
+    if (!requestedSpace)
+      return NextResponse.json(
+        {
+          code: "PRODUCT_SPACE_REQUIRED",
+          error: "Select a Product Space to load Project Management.",
+        },
+        { status: 409 },
+      );
+    if (!requested)
+      return NextResponse.json(
+        {
+          code: "PROJECT_REQUIRED",
+          error: "Select a Project to load Project Management.",
+        },
+        { status: 409 },
+      );
     const workspace = (await projectManagementGet("/workspace")) as Workspace;
     const spaces = (workspace.product_spaces || []).map((space) => ({
       ...space,
       projects: space.projects || [],
     }));
-    const requested = request.nextUrl.searchParams.get("projectId") || "";
-    const requestedSpace =
-      request.nextUrl.searchParams.get("productSpaceId") || "";
     const projects = spaces.flatMap((space) =>
       space.projects.map((project) => ({
         ...project,
         productSpaceId: space.id,
       })),
     );
-    const project =
-      projects.find((item) => item.id === requested) ||
-      projects.find((item) => item.productSpaceId === requestedSpace) ||
-      projects[0] ||
-      null;
+    const project = projects.find((item) => item.id === requested) || null;
     if (!project)
-      return NextResponse.json({
-        spaces,
-        project: null,
-        releases: [],
-        features: [],
-        stories: [],
-        sprints: [],
-        syncedAt: new Date().toISOString(),
-      });
+      return NextResponse.json(
+        {
+          code: "PROJECT_NOT_FOUND",
+          error: "The selected Project is not available in Project Management.",
+        },
+        { status: 404 },
+      );
+    if (project.productSpaceId !== requestedSpace)
+      return NextResponse.json(
+        {
+          code: "PROJECT_OUTSIDE_PRODUCT_SPACE",
+          error: "The selected Project does not belong to this Product Space.",
+        },
+        { status: 422 },
+      );
     const filters = new URLSearchParams();
     for (const key of ["piReleaseId", "featureId", "sprintId", "userStoryId"]) {
-      const current = request.nextUrl.searchParams.get(key);
+      const requestKey = key === "piReleaseId" ? "releaseId" : key;
+      const current = request.nextUrl.searchParams.get(requestKey);
       if (
         current &&
         (uuid.test(current) || (key === "sprintId" && current === "unassigned"))

@@ -1,5 +1,60 @@
 "use client";
-import { Bell,CalendarDays,HelpCircle,Menu,RefreshCw,Search } from "lucide-react";
+
+import { Bell, CalendarDays, HelpCircle, Menu, Search } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useAppStore } from "@/stores/app-store";
-export function TopHeader(){const s=useAppStore(),path=usePathname();const set=(key:string,value:string)=>s.setContext({[key]:value});const crumbs=path.split("/").filter(Boolean).filter(x=>x!=="workspace").map(x=>x.split("-").map(y=>y[0]?.toUpperCase()+y.slice(1)).join(" "));return <header className="top-header"><button className="mobile-menu" onClick={s.toggleSidebar} aria-label="Open navigation"><Menu/></button><div className="breadcrumbs desktop-only"><span>Workspace</span>{crumbs.map(x=><span key={x}><b>/</b> <strong>{x}</strong></span>)}</div><label className="global-search desktop-only"><Search/><input aria-label="Global search" placeholder="Search knowledge, releases, APIs…"/><kbd>Ctrl K</kbd></label><div className="selectors"><label><small>PRODUCT</small><select value={s.productName} onChange={e=>set("productName",e.target.value)}><option>Commerce Cloud</option><option>Identity Platform</option></select></label><label className="desktop-only"><small>ENVIRONMENT</small><select value={s.environment} onChange={e=>set("environment",e.target.value)}><option>Production</option><option>Staging</option></select></label><label><small>RELEASE</small><select value={s.selectedRelease} onChange={e=>set("selectedRelease",e.target.value)}><option>3.2.1</option><option>3.2.0</option><option>3.1.8</option></select></label></div><button className="head-icon desktop-only" aria-label="Date range"><CalendarDays/></button><button className="head-icon desktop-only" aria-label="Refresh"><RefreshCw/></button><button className="head-icon desktop-only" aria-label="Help"><HelpCircle/></button><button className="head-icon notify" aria-label="Notifications"><Bell/><i/></button></header>}
+
+export function TopHeader() {
+  const toggleSidebar = useAppStore((state) => state.toggleSidebar);
+  const path = usePathname();
+  const crumbs = path
+    .split("/")
+    .filter(Boolean)
+    .filter((part) => part !== "workspace")
+    .map((part) =>
+      part
+        .split("-")
+        .map((word) => word[0]?.toUpperCase() + word.slice(1))
+        .join(" "),
+    );
+  return (
+    <header className="top-header">
+      <button
+        className="mobile-menu"
+        onClick={toggleSidebar}
+        aria-label="Open navigation"
+      >
+        <Menu />
+      </button>
+      <div className="breadcrumbs desktop-only">
+        <span>Workspace</span>
+        {crumbs.map((crumb) => (
+          <span key={crumb}>
+            <b>/</b> <strong>{crumb}</strong>
+          </span>
+        ))}
+      </div>
+      <label className="global-search desktop-only">
+        <Search />
+        <input
+          aria-label="Global search"
+          placeholder="Search knowledge, releases, APIs…"
+        />
+        <kbd>Ctrl K</kbd>
+      </label>
+      <span className="top-header-context-note desktop-only">
+        Context is shared across ReleaseMind
+      </span>
+      <button className="head-icon desktop-only" aria-label="Date range">
+        <CalendarDays />
+      </button>
+      <button className="head-icon desktop-only" aria-label="Help">
+        <HelpCircle />
+      </button>
+      <button className="head-icon notify" aria-label="Notifications">
+        <Bell />
+        <i />
+      </button>
+    </header>
+  );
+}

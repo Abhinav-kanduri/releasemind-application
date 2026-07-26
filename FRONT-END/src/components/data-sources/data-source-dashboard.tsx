@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
@@ -14,7 +14,7 @@ import {
   RotateCw,
   Upload,
 } from "lucide-react";
-import { useAppStore } from "@/stores/app-store";
+import { useWorkspaceContext } from "@/workspace-context";
 
 type Source = "github" | "project-management" | "knowledge-base";
 type Item = {
@@ -53,32 +53,35 @@ const titles = {
 
 export function DataSourceDashboard({ source }: { source: Source }) {
   const router = useRouter(),
-    params = useSearchParams(),
-    productSpaceId = useAppStore((s) => s.productSpaceId),
-    storedProjectId = useAppStore((s) => s.projectId),
-    setContext = useAppStore((s) => s.setContext);
+    params = useSearchParams();
+  const productSpaceId = useWorkspaceContext(
+      (state) => state.productSpaceId,
+    ),
+    projectId = useWorkspaceContext((state) => state.projectId),
+    releaseId = useWorkspaceContext((state) => state.releaseId) || "",
+    selectRelease = useWorkspaceContext((state) => state.selectRelease);
   const [data, setData] = useState<Data | null>(null),
-    [loading, setLoading] = useState(true),
+    [loading, setLoading] = useState(false),
     [error, setError] = useState("");
-  const [spaceId, setSpaceId] = useState(
-    params.get("productSpaceId") || productSpaceId || "",
-  );
-  const [projectId, setProjectId] = useState(
-    params.get("projectId") || storedProjectId || "",
-  );
-  const [releaseId, setReleaseId] = useState(params.get("piReleaseId") || ""),
-    [featureId, setFeatureId] = useState(params.get("featureId") || ""),
+  const [featureId, setFeatureId] = useState(params.get("featureId") || ""),
     [sprintId, setSprintId] = useState(params.get("sprintId") || ""),
     [storyId, setStoryId] = useState(params.get("userStoryId") || "");
+  const previousProjectId = useRef(projectId);
   const load = useCallback(async () => {
+    if (!productSpaceId || !projectId) {
+      setData(null);
+      setLoading(false);
+      setError("");
+      return;
+    }
     setLoading(true);
     setError("");
     try {
       const query = new URLSearchParams();
-      if (spaceId) query.set("productSpaceId", spaceId);
-      if (projectId) query.set("projectId", projectId);
+      query.set("productSpaceId", productSpaceId);
+      query.set("projectId", projectId);
       if (source === "project-management") {
-        if (releaseId) query.set("piReleaseId", releaseId);
+        if (releaseId) query.set("releaseId", releaseId);
         if (featureId) query.set("featureId", featureId);
         if (sprintId) query.set("sprintId", sprintId);
         if (storyId) query.set("userStoryId", storyId);
@@ -91,14 +94,7 @@ export function DataSourceDashboard({ source }: { source: Source }) {
       const body = await r.json();
       if (!r.ok)
         throw new Error(body.error || "Project Management API is unavailable.");
-      const next: Data = body;
-      setData(next);
-      const p = next.project;
-      if (p) {
-        setProjectId(p.id);
-        setSpaceId(p.productSpaceId);
-        setContext({ projectId: p.id, productSpaceId: p.productSpaceId });
-      }
+      setData(body as Data);
     } catch (e) {
       setError(
         e instanceof Error
@@ -109,20 +105,17 @@ export function DataSourceDashboard({ source }: { source: Source }) {
       setLoading(false);
     }
   }, [
-    spaceId,
+    productSpaceId,
     projectId,
     source,
     releaseId,
     featureId,
     sprintId,
     storyId,
-    setContext,
   ]);
   useEffect(() => {
     void load();
   }, [load]);
-  const space = data?.spaces.find((x) => x.id === spaceId),
-    projects = space?.projects ?? [];
   const features = useMemo(
     () =>
       data?.features.filter((x) => !releaseId || x.releaseId === releaseId) ??
@@ -161,6 +154,14 @@ export function DataSourceDashboard({ source }: { source: Source }) {
     [params, router],
   );
   useEffect(() => {
+    if (previousProjectId.current === projectId) return;
+    previousProjectId.current = projectId;
+    setFeatureId("");
+    setSprintId("");
+    setStoryId("");
+    syncUrl({ featureId: "", sprintId: "", userStoryId: "" });
+  }, [projectId, syncUrl]);
+  useEffect(() => {
     if (featureId && !features.some((x) => x.id === featureId)) {
       setFeatureId("");
       setSprintId("");
@@ -181,53 +182,6 @@ export function DataSourceDashboard({ source }: { source: Source }) {
       syncUrl({ userStoryId: "" });
     }
   }, [storyId, stories, syncUrl]);
-  const changeSpace = (id: string) => {
-    setSpaceId(id);
-    setProjectId("");
-    setReleaseId("");
-    setFeatureId("");
-    setSprintId("");
-    setStoryId("");
-    setContext({
-      productSpaceId: id,
-      projectId: "",
-      piReleaseId: "",
-      featureId: "",
-      sprintId: "",
-      userStoryId: "",
-    });
-    syncUrl({
-      productSpaceId: id,
-      projectId: "",
-      piReleaseId: "",
-      featureId: "",
-      sprintId: "",
-      userStoryId: "",
-    });
-  };
-  const changeProject = (id: string) => {
-    setProjectId(id);
-    setReleaseId("");
-    setFeatureId("");
-    setSprintId("");
-    setStoryId("");
-    setContext({
-      projectId: id,
-      productSpaceId: spaceId,
-      piReleaseId: "",
-      featureId: "",
-      sprintId: "",
-      userStoryId: "",
-    });
-    syncUrl({
-      productSpaceId: spaceId,
-      projectId: id,
-      piReleaseId: "",
-      featureId: "",
-      sprintId: "",
-      userStoryId: "",
-    });
-  };
   return (
     <main className="dashboard source-dashboard">
       <div className="source-back">
@@ -251,54 +205,27 @@ export function DataSourceDashboard({ source }: { source: Source }) {
           {source === "knowledge-base" ? "Sync delayed" : "Healthy"}
         </span>
       </div>
-      <section className="card context-card">
-        <div className="context-title">
-          <div>
-            <small>WORKSPACE CONTEXT</small>
-            <strong>
-              Product Space <ChevronRight /> Project
-            </strong>
-          </div>
-          <span>Shared across ReleaseLens</span>
-        </div>
-        <div className="context-selectors">
-          <label>
-            <span>Product Space</span>
-            <select
-              value={spaceId}
-              onChange={(e) => changeSpace(e.target.value)}
-              disabled={loading}
-            >
-              <option value="">Select product space</option>
-              {data?.spaces.map((x) => (
-                <option value={x.id} key={x.id}>
-                  {x.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Project</span>
-            <select
-              value={projectId}
-              onChange={(e) => changeProject(e.target.value)}
-              disabled={loading || !spaceId}
-            >
-              <option value="">Select project</option>
-              {projects.map((x) => (
-                <option value={x.id} key={x.id}>
-                  {x.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </section>
-      {error ? (
+      {!productSpaceId ? (
+        <Empty
+          icon={<Database />}
+          title="Select a Product Space"
+          text="Choose a Product Space in Workspace Context to load its available Projects."
+        />
+      ) : !projectId ? (
+        <Empty
+          icon={<Database />}
+          title="Select a Project"
+          text="Choose a Project in Workspace Context to load project-scoped records and synchronization health."
+        />
+      ) : error ? (
         <section className="card source-state error">
           <AlertCircle />
           <div>
-            <h2>Unable to load this dashboard</h2>
+            <h2>
+              {source === "project-management"
+                ? "Project Management source unavailable"
+                : `${titles[source]} source unavailable`}
+            </h2>
             <p>{error}</p>
             <button onClick={load}>
               <RefreshCw />
@@ -325,30 +252,24 @@ export function DataSourceDashboard({ source }: { source: Source }) {
           sprints={sprints}
           stories={stories}
           set={(key, value) => {
+            if (key === "releaseId") {
+              selectRelease(value || null);
+              return;
+            }
             const setters = {
-              releaseId: setReleaseId,
               featureId: setFeatureId,
               sprintId: setSprintId,
               userStoryId: setStoryId,
             };
             setters[key](value);
-            const urlKey = key === "releaseId" ? "piReleaseId" : key;
-            setContext({ [urlKey]: value });
-            syncUrl({ [urlKey]: value });
+            syncUrl({ [key]: value });
           }}
           clear={() => {
-            setReleaseId("");
+            selectRelease(null);
             setFeatureId("");
             setSprintId("");
             setStoryId("");
-            setContext({
-              piReleaseId: "",
-              featureId: "",
-              sprintId: "",
-              userStoryId: "",
-            });
             syncUrl({
-              piReleaseId: "",
               featureId: "",
               sprintId: "",
               userStoryId: "",

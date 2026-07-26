@@ -29,6 +29,15 @@ async function backend(path: string, init?: RequestInit) {
   return body;
 }
 async function context(productSpaceId?: string, projectId?: string) {
+  if (!productSpaceId)
+    throw Object.assign(
+      new Error("Select a Product Space before using Chat."),
+      { status: 409 },
+    );
+  if (!projectId)
+    throw Object.assign(new Error("Select a Project before using Chat."), {
+      status: 409,
+    });
   const workspace = await backend("/workspace");
   const spaces = workspace.product_spaces || [];
   const projects = spaces.flatMap(
@@ -39,10 +48,15 @@ async function context(productSpaceId?: string, projectId?: string) {
       })),
   ) as Array<{ id: string; name: string; product_space_id: string }>;
   const project =
-    projects.find((item) => item.id === projectId) ||
-    projects.find((item) => item.product_space_id === productSpaceId) ||
-    projects[0];
-  if (!project) throw new Error("No active Project is available for Chat.");
+    projects.find(
+      (item) =>
+        item.id === projectId && item.product_space_id === productSpaceId,
+    ) || null;
+  if (!project)
+    throw Object.assign(
+      new Error("The selected Project is not available in this Product Space."),
+      { status: 422 },
+    );
   return {
     project_id: project.id,
     product_space_id: project.product_space_id,
