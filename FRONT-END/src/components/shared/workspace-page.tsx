@@ -1,15 +1,243 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight,Construction,Database,Filter,Plus,Search,ShieldCheck,Sparkles,X } from "lucide-react";
+import {
+  ArrowRight,
+  Construction,
+  Database,
+  Filter,
+  Plus,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useWorkspaceContext } from "@/workspace-context";
-type Config={title:string;eyebrow:string;description:string;action:string;stats:[string,string,string][];items:string[]};
-const configs:Record<string,Config>={assistant:{title:"Ask ReleaseLens",eyebrow:"RELEASE-AWARE AI",description:"Ask grounded questions using evidence from the selected release.",action:"New conversation",stats:[["Grounded answers","96.8%","Healthy"],["Avg. response","2.4s","-12%"],["Citations verified","98.7%","Passing"]],items:["What changed in this release?","Which APIs have breaking changes?","Trace checkout to code and tests"]},"data-sources":{title:"Data sources",eyebrow:"ENTERPRISE CONNECTORS",description:"Manage repositories, project planning, and knowledge documents.",action:"Connect source",stats:[["Connected","3","3 categories"],["Healthy","2","66.7%"],["Artifacts","48.2K","+1.2K today"]],items:["GitHub · Healthy","Project Management Tool · Healthy","Knowledge Base · Sync delayed"]}};
-const fallback:Config={title:"Workspace",eyebrow:"RELEASELENS",description:"Explore release-aware product knowledge and platform activity.",action:"Get started",stats:[["Status","Ready","Available"],["Release","Current","Selected"],["Access","Granted","Authorized"]],items:["Workspace overview","Release context","Platform activity"]};
-export function WorkspacePage({section}:{section:string}){
- const config=configs[section]??{...fallback,title:section.split("-").map(x=>x[0]?.toUpperCase()+x.slice(1)).join(" ")};
- const release=useWorkspaceContext(s=>s.release?.name||"All releases"),releaseId=useWorkspaceContext(s=>s.releaseId),spaceId=useWorkspaceContext(s=>s.productSpaceId),projectId=useWorkspaceContext(s=>s.projectId),environmentId=useWorkspaceContext(s=>s.environmentId);
- const [query,setQuery]=useState(""),[connectOpen,setConnectOpen]=useState(false);const router=useRouter();
- const openSource=(index:number)=>{const route=["github","project-management","knowledge-base"][index];const params=new URLSearchParams();if(spaceId)params.set("productSpaceId",spaceId);if(projectId)params.set("projectId",projectId);if(releaseId)params.set("releaseId",releaseId);if(environmentId)params.set("environmentId",environmentId);router.push(`/workspace/data-sources/${route}?${params}`)};
- return <main className="dashboard workspace-page"><div className="page-heading"><div><span className="eyebrow">{config.eyebrow}</span><h1>{config.title}</h1><p>{config.description} Release context: <b>{release}</b>.</p></div><button onClick={()=>section==="data-sources"&&setConnectOpen(true)}><Plus/> {config.action}</button></div><section className="workspace-stats">{config.stats.map(([label,value,note],i)=><article className="card" key={label}><span>{i===0?<Database/>:i===1?<ShieldCheck/>:<Sparkles/>}</span><div><small>{label}</small><strong>{value}</strong><em>{note}</em></div></article>)}</section><section className="card workspace-content"><div className="workspace-toolbar"><label><Search/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={`Search ${config.title.toLowerCase()}…`} aria-label={`Search ${config.title}`}/></label><button><Filter/> Filters</button></div><div className="workspace-list">{config.items.filter(x=>x.toLowerCase().includes(query.toLowerCase())).map((item,i)=>{const [name,status]=item.split(" · ");return <button key={item} onClick={()=>section==="data-sources"&&openSource(i)} aria-label={section==="data-sources"?`Open ${name} dashboard`:undefined}><span>{i+1}</span><div><strong>{name}</strong><small>{status||`Release ${release}`}</small></div><ArrowRight/></button>})}</div>{section!=="data-sources"&&<div className="phase-note"><Construction/><div><strong>Functional area initialized</strong><p>This route preserves navigation and global release context.</p></div></div>}</section>{connectOpen&&<div className="modal-backdrop" role="presentation" onMouseDown={()=>setConnectOpen(false)}><section className="card connect-modal" role="dialog" aria-modal="true" aria-labelledby="connect-title" onMouseDown={e=>e.stopPropagation()}><button className="modal-close" onClick={()=>setConnectOpen(false)} aria-label="Close connect source"><X/></button><span className="eyebrow">NEW CONNECTION</span><h2 id="connect-title">Connect a data source</h2><p>Choose a source to continue with project-scoped configuration.</p>{["GitHub","Project Management Tool","Knowledge Base"].map((name,i)=><button className="connector-option" key={name} onClick={()=>{setConnectOpen(false);openSource(i)}}><Database/><span><strong>{name}</strong><small>Configure for the selected Product Space and Project</small></span><ArrowRight/></button>)}</section></div>}</main>
+type Config = {
+  title: string;
+  eyebrow: string;
+  description: string;
+  action: string;
+  stats: [string, string, string][];
+  items: string[];
+};
+const configs: Record<string, Config> = {
+  assistant: {
+    title: "Ask ReleaseLens",
+    eyebrow: "RELEASE-AWARE AI",
+    description:
+      "Ask grounded questions using evidence from the selected release.",
+    action: "New conversation",
+    stats: [
+      ["Grounded answers", "96.8%", "Healthy"],
+      ["Avg. response", "2.4s", "-12%"],
+      ["Citations verified", "98.7%", "Passing"],
+    ],
+    items: [
+      "What changed in this release?",
+      "Which APIs have breaking changes?",
+      "Trace checkout to code and tests",
+    ],
+  },
+  "data-sources": {
+    title: "Data sources",
+    eyebrow: "ENTERPRISE CONNECTORS",
+    description:
+      "Manage repositories, project planning, knowledge documents, and impact intelligence.",
+    action: "Connect source",
+    stats: [
+      ["Connected", "4", "4 categories"],
+      ["Healthy", "3", "75%"],
+      ["Artifacts", "48.2K", "+1.2K today"],
+    ],
+    items: [
+      "GitHub · Healthy",
+      "Project Management Tool · Healthy",
+      "Knowledge Base · Sync delayed",
+      "Impact Analysis · Ready",
+    ],
+  },
+};
+const fallback: Config = {
+  title: "Workspace",
+  eyebrow: "RELEASELENS",
+  description: "Explore release-aware product knowledge and platform activity.",
+  action: "Get started",
+  stats: [
+    ["Status", "Ready", "Available"],
+    ["Release", "Current", "Selected"],
+    ["Access", "Granted", "Authorized"],
+  ],
+  items: ["Workspace overview", "Release context", "Platform activity"],
+};
+export function WorkspacePage({ section }: { section: string }) {
+  const config = configs[section] ?? {
+    ...fallback,
+    title: section
+      .split("-")
+      .map((x) => x[0]?.toUpperCase() + x.slice(1))
+      .join(" "),
+  };
+  const release = useWorkspaceContext((s) => s.release?.name || "All releases"),
+    releaseId = useWorkspaceContext((s) => s.releaseId),
+    spaceId = useWorkspaceContext((s) => s.productSpaceId),
+    projectId = useWorkspaceContext((s) => s.projectId),
+    environmentId = useWorkspaceContext((s) => s.environmentId);
+  const [query, setQuery] = useState(""),
+    [connectOpen, setConnectOpen] = useState(false);
+  const router = useRouter();
+  const openSource = (index: number) => {
+    const route = [
+      "github",
+      "project-management",
+      "knowledge-base",
+      "impact-analysis",
+    ][index];
+    const params = new URLSearchParams();
+    if (spaceId) params.set("productSpaceId", spaceId);
+    if (projectId) params.set("projectId", projectId);
+    if (releaseId) params.set("releaseId", releaseId);
+    if (environmentId) params.set("environmentId", environmentId);
+    router.push(`/workspace/data-sources/${route}?${params}`);
+  };
+  return (
+    <main className="dashboard workspace-page">
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">{config.eyebrow}</span>
+          <h1>{config.title}</h1>
+          <p>
+            {config.description} Release context: <b>{release}</b>.
+          </p>
+        </div>
+        <button
+          onClick={() => section === "data-sources" && setConnectOpen(true)}
+        >
+          <Plus /> {config.action}
+        </button>
+      </div>
+      <section className="workspace-stats">
+        {config.stats.map(([label, value, note], i) => (
+          <article className="card" key={label}>
+            <span>
+              {i === 0 ? (
+                <Database />
+              ) : i === 1 ? (
+                <ShieldCheck />
+              ) : (
+                <Sparkles />
+              )}
+            </span>
+            <div>
+              <small>{label}</small>
+              <strong>{value}</strong>
+              <em>{note}</em>
+            </div>
+          </article>
+        ))}
+      </section>
+      <section className="card workspace-content">
+        <div className="workspace-toolbar">
+          <label>
+            <Search />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={`Search ${config.title.toLowerCase()}…`}
+              aria-label={`Search ${config.title}`}
+            />
+          </label>
+          <button>
+            <Filter /> Filters
+          </button>
+        </div>
+        <div className="workspace-list">
+          {config.items
+            .filter((x) => x.toLowerCase().includes(query.toLowerCase()))
+            .map((item, i) => {
+              const [name, status] = item.split(" · ");
+              return (
+                <button
+                  key={item}
+                  onClick={() => section === "data-sources" && openSource(i)}
+                  aria-label={
+                    section === "data-sources"
+                      ? `Open ${name} dashboard`
+                      : undefined
+                  }
+                >
+                  <span>{i + 1}</span>
+                  <div>
+                    <strong>{name}</strong>
+                    <small>{status || `Release ${release}`}</small>
+                  </div>
+                  <ArrowRight />
+                </button>
+              );
+            })}
+        </div>
+        {section !== "data-sources" && (
+          <div className="phase-note">
+            <Construction />
+            <div>
+              <strong>Functional area initialized</strong>
+              <p>This route preserves navigation and global release context.</p>
+            </div>
+          </div>
+        )}
+      </section>
+      {connectOpen && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={() => setConnectOpen(false)}
+        >
+          <section
+            className="card connect-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="connect-title"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              onClick={() => setConnectOpen(false)}
+              aria-label="Close connect source"
+            >
+              <X />
+            </button>
+            <span className="eyebrow">NEW CONNECTION</span>
+            <h2 id="connect-title">Connect a data source</h2>
+            <p>
+              Choose a source to continue with project-scoped configuration.
+            </p>
+            {[
+              "GitHub",
+              "Project Management Tool",
+              "Knowledge Base",
+              "Impact Analysis",
+            ].map((name, i) => (
+              <button
+                className="connector-option"
+                key={name}
+                onClick={() => {
+                  setConnectOpen(false);
+                  openSource(i);
+                }}
+              >
+                <Database />
+                <span>
+                  <strong>{name}</strong>
+                  <small>
+                    Configure for the selected Product Space and Project
+                  </small>
+                </span>
+                <ArrowRight />
+              </button>
+            ))}
+          </section>
+        </div>
+      )}
+    </main>
+  );
 }

@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/assistant-sanitizer.test.mjs tests/assistant-ui-contract.test.mjs tests/workspace-context.test.mjs",
+    "test": "node --experimental-strip-types --test tests/assistant-sanitizer.test.mjs tests/assistant-ui-contract.test.mjs tests/workspace-context.test.mjs tests/knowledge-base-contract.test.mjs tests/impact-analysis.test.mjs tests/dashboard-health.test.mjs",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy"
   },

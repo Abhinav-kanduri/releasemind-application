@@ -1,0 +1,9 @@
+/* Cross-dashboard responsive constraints. */
+.planning-grid label {
+  min-width: 0;
+}
+
+.planning-grid select {
+  width: 100%;
+  max-width: 100%;
+}
