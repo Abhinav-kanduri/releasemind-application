@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
-  BookOpen,
   ChevronRight,
   Database,
   FileText,
@@ -12,9 +11,9 @@ import {
   GitBranch,
   RefreshCw,
   RotateCw,
-  Upload,
 } from "lucide-react";
 import { useWorkspaceContext } from "@/workspace-context";
+import { KnowledgeBaseDashboard } from "@/components/knowledge-base/knowledge-base-dashboard";
 
 type Source = "github" | "project-management" | "knowledge-base";
 type Item = {
@@ -199,10 +198,10 @@ export function DataSourceDashboard({ source }: { source: Source }) {
           </p>
         </div>
         <span
-          className={`source-health ${source === "knowledge-base" ? "delayed" : "healthy"}`}
+          className="source-health healthy"
         >
           <i />
-          {source === "knowledge-base" ? "Sync delayed" : "Healthy"}
+          {source === "knowledge-base" ? "Connected" : "Healthy"}
         </span>
       </div>
       {!productSpaceId ? (
@@ -280,7 +279,7 @@ export function DataSourceDashboard({ source }: { source: Source }) {
       ) : source === "github" ? (
         <GitHub project={data.project.name} />
       ) : (
-        <Knowledge project={data.project.name} />
+        <KnowledgeBaseDashboard project={data.project.name} />
       )}
     </main>
   );
@@ -616,22 +615,6 @@ function GitHub({ project }: { project: string }) {
         icon={<FolderGit2 />}
         title="No GitHub repositories are connected to this project."
         text={`Connect a repository to ${project} to index branches, files, pull requests, and commits.`}
-      />
-    </>
-  );
-}
-function Knowledge({ project }: { project: string }) {
-  return (
-    <>
-      <section className="source-metrics">
-        <Metric label="Documents" value="0" icon={<BookOpen />} />
-        <Metric label="Chunks" value="0" icon={<FileText />} />
-        <Metric label="Embedded" value="0" icon={<Database />} />
-      </section>
-      <Empty
-        icon={<Upload />}
-        title="No Knowledge Base documents exist for this project."
-        text={`Upload or connect documents for ${project} to begin release-aware ingestion.`}
       />
     </>
   );
