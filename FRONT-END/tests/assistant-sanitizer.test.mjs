@@ -27,3 +27,10 @@ test("hides identical or missing relevance scores", () => {
   assert.equal(hasMeaningfulScores([undefined, undefined]), false);
   assert.equal(hasMeaningfulScores([0.92, 0.71, 0.55]), true);
 });
+
+test("removes duplicate consecutive Markdown headings", () => {
+  const answer = sanitizeAssistantAnswer(
+    "## Project Structure\n## Project Structure\nThe repository is grouped by capability.",
+  );
+  assert.equal((answer.match(/Project Structure/g) || []).length, 1);
+});

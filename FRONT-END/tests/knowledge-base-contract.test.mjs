@@ -16,6 +16,9 @@ test("Knowledge Base UI consumes shared context and manages ingestion", () => {
   assert.match(dashboard, /\/retry\?/);
   assert.match(dashboard, /method: "DELETE"/);
   assert.match(dashboard, /window\.setInterval/);
+  assert.match(dashboard, /response\.text\(\)/);
+  assert.match(dashboard, /JSON\.parse\(raw\)/);
+  assert.doesNotMatch(dashboard, /response\.json\(\)/);
   assert.doesNotMatch(dashboard, /setProductSpaceId|setProjectId/);
 });
 

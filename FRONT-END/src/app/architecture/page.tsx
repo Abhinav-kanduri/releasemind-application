@@ -1,1 +1,10 @@
-import { AppShell } from "@/components/layout/app-shell";import { Layers3 } from "lucide-react";export default function Page(){return <AppShell><main className="dashboard"><div className="page-heading"><div><span className="eyebrow">PLATFORM BLUEPRINT</span><h1>End-to-end architecture</h1><p>Explore the twelve layers that turn enterprise artifacts into release-aware intelligence.</p></div></div><div className="card route-placeholder"><Layers3/><h2>Interactive architecture workspace</h2><p>The complete architecture explorer is the next functional phase. The application shell, navigation, release context and theme system are ready.</p></div></main></AppShell>}
+import { ArchitectureWorkspace } from "@/components/architecture/architecture-workspace";
+import { AppShell } from "@/components/layout/app-shell";
+
+export default function Page() {
+  return (
+    <AppShell>
+      <ArchitectureWorkspace />
+    </AppShell>
+  );
+}

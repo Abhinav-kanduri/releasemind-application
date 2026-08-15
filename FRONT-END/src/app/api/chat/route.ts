@@ -15,14 +15,26 @@ async function backend(path: string, init?: RequestInit) {
       ...(init?.headers || {}),
     },
   });
-  const body = await response.json();
+  const rawBody = await response.text();
+  let body: Record<string, any> = {};
+  if (rawBody) {
+    try {
+      body = JSON.parse(rawBody) as Record<string, any>;
+    } catch {
+      body = {
+        message: response.ok
+          ? "Chat service returned an invalid response."
+          : rawBody.trim() || `Chat service returned ${response.status}.`,
+      };
+    }
+  }
   if (!response.ok)
     throw Object.assign(
       new Error(
         body.detail?.message ||
           body.detail ||
           body.message ||
-          "Chat request failed.",
+          `Chat service returned ${response.status}.`,
       ),
       { status: response.status, body },
     );

@@ -3,27 +3,36 @@ import {
   MessageSquarePlus,
   PanelRight,
   RefreshCw,
+  SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
 
 export function AssistantHeader({
   projectName,
-  environment,
+  release,
+  title,
   hasSession,
   evidenceOpen,
+  contextOpen,
+  sourcesCount,
   onNew,
   onRefresh,
   onToggleHistory,
   onToggleEvidence,
+  onToggleContext,
 }: {
   projectName: string;
-  environment: string;
+  release: string;
+  title: string;
   hasSession: boolean;
   evidenceOpen: boolean;
+  contextOpen: boolean;
+  sourcesCount: number;
   onNew: () => void;
   onRefresh: () => void;
   onToggleHistory: () => void;
   onToggleEvidence: () => void;
+  onToggleContext: () => void;
 }) {
   return (
     <header className="chat-header">
@@ -31,10 +40,10 @@ export function AssistantHeader({
         <Sparkles />
       </span>
       <div>
-        <h1>Ask ReleaseLens</h1>
+        <h1>{title}</h1>
         <p>
           <i />
-          {projectName} · {environment}
+          {projectName} · {release}
         </p>
       </div>
       <div className="chat-header-actions">
@@ -45,6 +54,16 @@ export function AssistantHeader({
           title="Conversation history"
         >
           <History />
+        </button>
+        <button
+          className="context-toggle"
+          onClick={onToggleContext}
+          aria-expanded={contextOpen}
+          aria-label="Open conversation context"
+          title="Conversation context"
+        >
+          <SlidersHorizontal />
+          <span>Context</span>
         </button>
         <button
           onClick={onNew}
@@ -64,10 +83,13 @@ export function AssistantHeader({
         <button
           onClick={onToggleEvidence}
           aria-expanded={evidenceOpen}
+          disabled={sourcesCount === 0}
           aria-label="Toggle Evidence panel"
           title="Evidence"
+          className="sources-toggle"
         >
           <PanelRight />
+          <span>Sources{sourcesCount ? ` · ${sourcesCount}` : ""}</span>
         </button>
       </div>
     </header>

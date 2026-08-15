@@ -1,7 +1,7 @@
 import type { Message } from "./assistant-types";
 export function UserMessage({ message }: { message: Message }) {
   return (
-    <article className="message user">
+    <article className="message user" id={`message-${message.id}`}>
       <div className="message-body">
         <strong>You</strong>
         <p>{message.text}</p>

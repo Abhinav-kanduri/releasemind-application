@@ -13,7 +13,7 @@ const routeDefinitions = [
   {
     path: `/data-sources?${scope}`,
     heading: "Data sources",
-    selectors: { ".workspace-list button": 4 },
+    selectors: { ".workspace-list button": 5 },
   },
   {
     path: `/workspace/data-sources/github?${scope}`,
@@ -40,9 +40,25 @@ const routeDefinitions = [
     },
   },
   {
+    path: `/rag-validation?${scope}`,
+    heading: "RAG Validation",
+    selectors: {
+      '[aria-label="Impact Analysis RAG pipeline"]': 1,
+      '[aria-label="RAG validation views"]': 1,
+    },
+  },
+  {
     path: `/workspace/data-sources/impact-analysis?${scope}`,
     heading: "Impact Analysis",
     selectors: { ".impact-metric": 7, ".impact-node": 1 },
+  },
+  {
+    path: `/workspace/data-sources/graph-analysis?${scope}`,
+    heading: "Graph Analysis",
+    selectors: {
+      ".source-metric": 3,
+      '[aria-label="Graph search query"]': 1,
+    },
   },
 ];
 const routeFilter = process.argv[3];

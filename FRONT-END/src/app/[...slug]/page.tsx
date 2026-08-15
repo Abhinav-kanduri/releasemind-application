@@ -2,7 +2,9 @@ import { AppShell } from "@/components/layout/app-shell";
 import { WorkspacePage } from "@/components/shared/workspace-page";
 import { DataSourceDashboard } from "@/components/data-sources/data-source-dashboard";
 import { ImpactAnalysisDashboard } from "@/components/impact-analysis/impact-analysis-dashboard";
+import { RagValidationDashboard } from "@/components/rag-validation/rag-validation-dashboard";
 import { notFound } from "next/navigation";
+import { GraphAnalysisDashboard } from "@/components/graph-analysis/graph-analysis-dashboard";
 const removedRoutes = new Set([
   "ai-generator",
   "releases",
@@ -24,6 +26,18 @@ export default async function Page({
       </AppShell>
     );
   if (removedRoutes.has(normalized[0])) notFound();
+  if (normalized[0] === "rag-validation")
+    return (
+      <AppShell>
+        <RagValidationDashboard />
+      </AppShell>
+    );
+  if (normalized[0] === "data-sources" && normalized[1] === "graph-analysis")
+    return (
+      <AppShell>
+        <GraphAnalysisDashboard />
+      </AppShell>
+    );
   if (normalized[0] === "data-sources" && normalized[1]) {
     if (normalized[1] === "impact-analysis")
       return (

@@ -2,13 +2,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, Bot, Copy } from "lucide-react";
 import { useWorkspaceContext } from "@/workspace-context";
+import {
+  getProjectRepositories,
+  getRepositoryBranches,
+} from "@/lib/impact-analysis/api";
+import type {
+  ProjectRepository,
+  RepositoryBranch,
+} from "@/lib/impact-analysis/types";
+import type {
+  GitHubLatestSummaryResponse,
+  GitHubSummaryDocumentReference,
+} from "@/lib/github-summary";
 import { AssistantHeader } from "./assistant-header";
 import { AssistantMessage } from "./assistant-message";
+import { AssistantTypingIndicator } from "./assistant-typing-indicator";
 import { ChatComposer } from "./chat-composer";
 import { ConversationDeleteDialog } from "./conversation-delete-dialog";
 import { ConversationSidebar } from "./conversation-sidebar";
+import { ConversationContextDrawer } from "./conversation-context-drawer";
+import { conversationTitle } from "./conversation-title";
 import { EvidencePanel } from "./evidence-panel";
-import { ProjectScopeBar } from "./project-scope-bar";
 import { UserMessage } from "./user-message";
 import { WelcomeState } from "./welcome-state";
 import type { Conversation, Message, Source } from "./assistant-types";
@@ -27,16 +41,28 @@ const groupName = (date?: string) => {
 
 const responseStages = [
   "Understanding your question…",
-  "Searching Project records…",
-  "Reviewing evidence…",
-  "Preparing the response…",
+  "Searching project data…",
+  "Reviewing connected knowledge…",
+  "Preparing your answer…",
 ];
+async function readApiResponse(response: Response) {
+  const raw = await response.text();
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    throw new Error(
+      `ReleaseLens received an invalid response (${response.status}). Please retry after the service restarts.`,
+    );
+  }
+}
 
 export function ChatWorkspace() {
   const productSpaceId = useWorkspaceContext(
       (state) => state.productSpaceId,
     ),
     projectId = useWorkspaceContext((state) => state.projectId),
+    release =
+      useWorkspaceContext((state) => state.release?.name) || "All releases",
     environment =
       useWorkspaceContext((state) => state.environment?.name) ||
       "All environments";
@@ -51,19 +77,153 @@ export function ChatWorkspace() {
     [messages, setMessages] = useState<Message[]>([]),
     [search, setSearch] = useState(""),
     [evidenceOpen, setEvidenceOpen] = useState(false),
+    [contextOpen, setContextOpen] = useState(false),
     [historyOpen, setHistoryOpen] = useState(false),
-    [preferenceReady, setPreferenceReady] = useState(false),
+    [historyCollapsed, setHistoryCollapsed] = useState(false),
     [highlightedSource, setHighlightedSource] = useState<number | null>(null),
     [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null),
     [notice, setNotice] = useState(""),
     [announcement, setAnnouncement] = useState(""),
     [responseStage, setResponseStage] = useState(0),
-    [showJumpToLatest, setShowJumpToLatest] = useState(false);
+    [showJumpToLatest, setShowJumpToLatest] = useState(false),
+    [repositories, setRepositories] = useState<ProjectRepository[]>([]),
+    [repositoryId, setRepositoryId] = useState(""),
+    [branches, setBranches] = useState<RepositoryBranch[]>([]),
+    [branch, setBranch] = useState(""),
+    [summaryDocument, setSummaryDocument] =
+      useState<GitHubSummaryDocumentReference | null>(null),
+    [useSummary, setUseSummary] = useState(false),
+    [scopeLoading, setScopeLoading] = useState(false),
+    [scopeError, setScopeError] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null),
     messagesRef = useRef<HTMLDivElement>(null),
     nearBottomRef = useRef(true),
     requestVersionRef = useRef(0),
-    sendingRef = useRef(false);
+    sendingRef = useRef(false),
+    repositoriesVersionRef = useRef(0),
+    branchesVersionRef = useRef(0),
+    summaryVersionRef = useRef(0);
+
+  const selectedRepository = useMemo(
+    () =>
+      repositories.find((item) => item.association_id === repositoryId) || null,
+    [repositories, repositoryId],
+  );
+
+  useEffect(() => {
+    const version = ++repositoriesVersionRef.current;
+    ++branchesVersionRef.current;
+    ++summaryVersionRef.current;
+    setRepositories([]);
+    setRepositoryId("");
+    setBranches([]);
+    setBranch("");
+    setSummaryDocument(null);
+    setUseSummary(false);
+    setScopeError("");
+    if (!productSpaceId || !projectId) return;
+    setScopeLoading(true);
+    getProjectRepositories(productSpaceId, projectId)
+      .then((items) => {
+        if (version !== repositoriesVersionRef.current) return;
+        setRepositories(items);
+        const first = items[0];
+        setRepositoryId(first?.association_id || "");
+      })
+      .catch((reason) => {
+        if (version !== repositoriesVersionRef.current) return;
+        setScopeError(
+          reason instanceof Error
+            ? reason.message
+            : "Linked repositories could not be loaded.",
+        );
+      })
+      .finally(() => {
+        if (version === repositoriesVersionRef.current) setScopeLoading(false);
+      });
+  }, [productSpaceId, projectId]);
+
+  useEffect(() => {
+    const version = ++branchesVersionRef.current;
+    ++summaryVersionRef.current;
+    setBranches([]);
+    setBranch("");
+    setSummaryDocument(null);
+    setUseSummary(false);
+    setScopeError("");
+    if (!selectedRepository) return;
+    setScopeLoading(true);
+    getRepositoryBranches(selectedRepository.repository_url)
+      .then((items) => {
+        if (version !== branchesVersionRef.current) return;
+        setBranches(items);
+        const defaultBranch =
+          items.find(
+            (item) => item.name === selectedRepository.default_branch,
+          )?.name ||
+          items[0]?.name ||
+          "";
+        setBranch(defaultBranch);
+      })
+      .catch((reason) => {
+        if (version !== branchesVersionRef.current) return;
+        setScopeError(
+          reason instanceof Error
+            ? reason.message
+            : "Repository branches could not be loaded.",
+        );
+      })
+      .finally(() => {
+        if (version === branchesVersionRef.current) setScopeLoading(false);
+      });
+  }, [selectedRepository]);
+
+  const loadLatestSummary = useCallback(async () => {
+    const version = ++summaryVersionRef.current;
+    if (!selectedRepository || !branch) {
+      setSummaryDocument(null);
+      setUseSummary(false);
+      return;
+    }
+    setScopeLoading(true);
+    setScopeError("");
+    try {
+      const query = new URLSearchParams({
+        repositoryUrl: selectedRepository.repository_url,
+        branch,
+      });
+      const response = await fetch(`/api/github/summary/latest?${query}`, {
+        cache: "no-store",
+      });
+      const body = (await readApiResponse(response)) as GitHubLatestSummaryResponse & {
+        error?: string;
+      };
+      if (version !== summaryVersionRef.current) return;
+      if (!response.ok)
+        throw new Error(
+          body.error || "Generated summary status could not be loaded.",
+        );
+      setSummaryDocument(body.summary || null);
+      setUseSummary(Boolean(body.summary));
+    } catch (reason) {
+      if (version !== summaryVersionRef.current) return;
+      setSummaryDocument(null);
+      setUseSummary(false);
+      setScopeError(
+        reason instanceof Error
+          ? reason.message
+          : "Generated summary status could not be loaded.",
+      );
+    } finally {
+      if (version === summaryVersionRef.current) setScopeLoading(false);
+    }
+  }, [selectedRepository, branch]);
+
+  useEffect(() => {
+    setSummaryDocument(null);
+    setUseSummary(false);
+    void loadLatestSummary();
+  }, [loadLatestSummary]);
 
   const loadConversations = useCallback(async () => {
     const version = ++requestVersionRef.current;
@@ -78,7 +238,7 @@ export function ChatWorkspace() {
       if (productSpaceId) query.set("productSpaceId", productSpaceId);
       if (projectId) query.set("projectId", projectId);
       const response = await fetch(`/api/chat?${query}`, { cache: "no-store" }),
-        body = await response.json();
+        body = await readApiResponse(response);
       if (version !== requestVersionRef.current) return;
       if (!response.ok)
         throw new Error(body.error || "Unable to load conversations.");
@@ -104,25 +264,24 @@ export function ChatWorkspace() {
     void loadConversations();
   }, [loadConversations]);
   useEffect(() => {
-    const saved = localStorage.getItem("releaselens-evidence-open"),
-      configure = () => {
-        if (window.innerWidth >= 1600) setEvidenceOpen(saved !== "false");
-        else setEvidenceOpen(false);
-        if (window.innerWidth >= 1100) setHistoryOpen(false);
-      };
-    configure();
-    setPreferenceReady(true);
+    setEvidenceOpen(false);
+    setContextOpen(false);
     const resize = () => {
-      if (window.innerWidth < 1600) setEvidenceOpen(false);
       if (window.innerWidth >= 1100) setHistoryOpen(false);
     };
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
   useEffect(() => {
-    if (preferenceReady)
-      localStorage.setItem("releaselens-evidence-open", String(evidenceOpen));
-  }, [evidenceOpen, preferenceReady]);
+    const closeDrawers = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setEvidenceOpen(false);
+      setContextOpen(false);
+      setHistoryOpen(false);
+    };
+    window.addEventListener("keydown", closeDrawers);
+    return () => window.removeEventListener("keydown", closeDrawers);
+  }, []);
   useEffect(() => {
     const textarea = composerRef.current;
     if (textarea) {
@@ -191,7 +350,7 @@ export function ChatWorkspace() {
           `/api/chat?sessionId=${encodeURIComponent(conversation.session_id)}`,
           { cache: "no-store" },
         ),
-        body = await response.json();
+        body = await readApiResponse(response);
       if (version !== requestVersionRef.current) return;
       if (!response.ok)
         throw new Error(body.error || "Unable to load conversation.");
@@ -258,6 +417,13 @@ export function ChatWorkspace() {
       ...current,
       { id: userId, role: "user", text: value, createdAt: sentAt },
     ]);
+    window.setTimeout(() => {
+      document.getElementById(`message-${userId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      nearBottomRef.current = false;
+    }, 0);
     setInput("");
     setSending(true);
     setError("");
@@ -272,9 +438,21 @@ export function ChatWorkspace() {
             project_id: projectId,
             message: value,
             client_message_id: userId,
+            context:
+              useSummary && summaryDocument
+                ? {
+                    grounding_mode: "GITHUB_SUMMARY",
+                    summary_document_id: summaryDocument.document_id,
+                    repository_url: summaryDocument.repository_url,
+                    repository_full_name:
+                      summaryDocument.repository_full_name,
+                    branch: summaryDocument.branch,
+                    commit_sha: summaryDocument.commit_sha,
+                  }
+                : { grounding_mode: "PROJECT" },
           }),
         }),
-        body = await response.json();
+        body = await readApiResponse(response);
       if (!response.ok)
         throw new Error(
           body.error || "ReleaseLens could not answer the question.",
@@ -333,7 +511,7 @@ export function ChatWorkspace() {
         `/api/chat?sessionId=${encodeURIComponent(target.session_id)}`,
         { method: "DELETE" },
       ),
-      body = await response.json();
+      body = await readApiResponse(response);
     if (!response.ok) {
       setError(body.error || "Unable to delete conversation.");
       return;
@@ -361,15 +539,38 @@ export function ChatWorkspace() {
     window.setTimeout(() => setHighlightedSource(null), 1600);
   };
   const viewSources = (messageSources: Source[]) => {
+    if (!messageSources.length) return;
     setSources(messageSources);
+    setContextOpen(false);
     setEvidenceOpen(true);
   };
   const lastQuestion = [...messages]
     .reverse()
     .find((message) => message.role === "user")?.text;
+  const summaryEvidence =
+    useSummary ||
+    sources.some((source) => source.source_type === "GITHUB_SUMMARY");
+  const activeResponseStages = useSummary
+    ? [
+        "Understanding your question…",
+        "Searching project context…",
+        "Checking GitHub…",
+        "Preparing your answer…",
+      ]
+    : responseStages;
+  const activeConversation = conversations.find(
+      (item) => item.session_id === sessionId,
+    ),
+    firstQuestion = messages.find((message) => message.role === "user")?.text,
+    currentTitle = messages.length
+      ? conversationTitle(activeConversation?.title || firstQuestion)
+      : "Ask ReleaseLens",
+    latestAssistantId = [...messages]
+      .reverse()
+      .find((message) => message.role === "assistant")?.id;
   return (
     <main
-      className={`chat-page ${evidenceOpen ? "evidence-open" : "evidence-collapsed"} ${historyOpen ? "history-open" : ""}`}
+      className={`chat-page ${historyOpen ? "history-open" : ""} ${historyCollapsed ? "history-collapsed" : ""} ${evidenceOpen ? "evidence-open" : ""} ${contextOpen ? "context-open" : ""}`}
     >
       <ConversationSidebar
         groups={grouped}
@@ -381,14 +582,20 @@ export function ChatWorkspace() {
         onNew={newConversation}
         onOpen={(conversation) => void openConversation(conversation)}
         onDelete={setDeleteTarget}
-        onClose={() => setHistoryOpen(false)}
+        onClose={() => {
+          if (window.innerWidth >= 1100) setHistoryCollapsed(true);
+          else setHistoryOpen(false);
+        }}
       />
       <section className="chat-center">
         <AssistantHeader
           projectName={projectName}
-          environment={environment}
+          release={release}
+          title={currentTitle}
           hasSession={Boolean(sessionId)}
           evidenceOpen={evidenceOpen}
+          contextOpen={contextOpen}
+          sourcesCount={sources.length}
           onNew={newConversation}
           onRefresh={() => {
             const selected = conversations.find(
@@ -396,10 +603,20 @@ export function ChatWorkspace() {
             );
             if (selected) void openConversation(selected);
           }}
-          onToggleHistory={() => setHistoryOpen((value) => !value)}
-          onToggleEvidence={() => setEvidenceOpen((value) => !value)}
+          onToggleHistory={() => {
+            if (window.innerWidth >= 1100)
+              setHistoryCollapsed((value) => !value);
+            else setHistoryOpen((value) => !value);
+          }}
+          onToggleEvidence={() => {
+            setContextOpen(false);
+            setEvidenceOpen((value) => !value);
+          }}
+          onToggleContext={() => {
+            setEvidenceOpen(false);
+            setContextOpen((value) => !value);
+          }}
         />
-        <ProjectScopeBar projectName={projectName} />
         <div
           className="messages"
           ref={messagesRef}
@@ -423,39 +640,53 @@ export function ChatWorkspace() {
               onAsk={(question) => void ask(question)}
             />
           ) : (
-            messages.map((message) =>
+            messages.map((message, messageIndex) =>
               message.role === "user" ? (
                 <UserMessage message={message} key={message.id} />
               ) : (
                 <AssistantMessage
                   message={message}
+                  question={
+                    messageIndex > 0 && messages[messageIndex - 1]?.role === "user"
+                      ? messages[messageIndex - 1].text
+                      : ""
+                  }
                   key={message.id}
                   onCitation={(index) =>
                     focusSource(message.sources || [], index)
                   }
                   onViewSources={() => viewSources(message.sources || [])}
+                  isLatest={message.id === latestAssistantId}
+                  onFollowUp={(question) => void ask(question)}
+                  onRegenerate={lastQuestion ? () => void ask(lastQuestion) : undefined}
                 />
               ),
             )
           )}
           {sending && (
-            <div className="thinking-card" role="status">
-              <Bot />
-              <div>
-                <strong>Preparing a grounded answer</strong>
-                <span>{responseStages[responseStage]}</span>
-              </div>
-              <i />
-              <i />
-              <i />
-            </div>
+            <AssistantTypingIndicator
+              status={activeResponseStages[responseStage]}
+            />
           )}
           {error && (
             <div className="chat-error" role="alert">
-              <strong>The response could not be completed.</strong>
-              <p>{error}</p>
+              <strong>I couldn&apos;t complete that response.</strong>
+              <p>Try again, or adjust the conversation context and ask once more.</p>
+              <div>
+                {lastQuestion && (
+                  <button onClick={() => void ask(lastQuestion)}>
+                    Try again
+                  </button>
+                )}
+                <button onClick={() => setContextOpen(true)}>Change context</button>
+              </div>
+              <details>
+                <summary>View details</summary>
+                <p>{error}</p>
+              </details>
               {lastQuestion && (
                 <button
+                  className="copy-question"
                   onClick={() =>
                     void navigator.clipboard.writeText(lastQuestion)
                   }
@@ -489,32 +720,64 @@ export function ChatWorkspace() {
           input={input}
           projectName={projectName}
           sending={sending}
+          hasConversation={messages.length > 0}
+          contextLabel={useSummary ? "Project + GitHub" : "Project context"}
           textareaRef={composerRef}
           onInput={setInput}
           onSubmit={() => void ask(input)}
+          onContext={() => {
+            setEvidenceOpen(false);
+            setContextOpen(true);
+          }}
         />
       </section>
-      {evidenceOpen ? (
+      {evidenceOpen && (
         <EvidencePanel
           sources={sources}
           onClose={() => setEvidenceOpen(false)}
           highlighted={highlightedSource}
+          retrievalLabel={
+            summaryEvidence
+              ? "GitHub repository evidence"
+              : "Project evidence"
+          }
         />
-      ) : (
-        <button
-          className="evidence-rail"
-          onClick={() => setEvidenceOpen(true)}
-          aria-label="Open Evidence panel"
-          aria-expanded="false"
-        >
-          <span>{sources.length}</span>
-        </button>
+      )}
+      {contextOpen && (
+        <ConversationContextDrawer
+          projectName={projectName}
+          release={release}
+          environment={environment}
+          repositories={repositories}
+          repositoryId={repositoryId}
+          branches={branches}
+          branch={branch}
+          summary={summaryDocument}
+          useSummary={useSummary}
+          loading={scopeLoading}
+          error={scopeError}
+          onRepository={(value) => {
+            newConversation();
+            setRepositoryId(value);
+          }}
+          onBranch={(value) => {
+            newConversation();
+            setBranch(value);
+          }}
+          onUseSummary={(value) => {
+            newConversation();
+            setUseSummary(value);
+          }}
+          onRefresh={() => void loadLatestSummary()}
+          onClose={() => setContextOpen(false)}
+        />
       )}
       <button
-        className={`assistant-drawer-backdrop ${historyOpen || evidenceOpen ? "visible" : ""}`}
+        className={`assistant-drawer-backdrop ${historyOpen || evidenceOpen || contextOpen ? "visible" : ""}`}
         onClick={() => {
           setHistoryOpen(false);
-          if (window.innerWidth < 1600) setEvidenceOpen(false);
+          setEvidenceOpen(false);
+          setContextOpen(false);
         }}
         aria-label="Close open panel"
       />

@@ -5,566 +5,818 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
-  ArrowDownToLine,
   CheckCircle2,
   ChevronRight,
-  CircleGauge,
   Clock3,
   Copy,
-  FileSearch,
-  Filter,
+  Download,
+  FileCode2,
   GitBranch,
+  History,
+  LoaderCircle,
   Network,
+  Play,
   Printer,
   RefreshCw,
   Search,
-  ShieldAlert,
-  SlidersHorizontal,
-  Sparkles,
-  Waypoints,
   X,
 } from "lucide-react";
+import {
+  getFindingEvidence,
+  getImpactFinding,
+  getImpactFindings,
+  getImpactComparison,
+  getImpactGraph,
+  getImpactHistory,
+  getImpactPlanningOptions,
+  getImpactRequirements,
+  getImpactRun,
+  getProjectRepositories,
+  getRepositoryBranches,
+  reanalyzeImpactRun,
+  startImpactAnalysis,
+} from "@/lib/impact-analysis/api";
+import {
+  IMPACT_GRAPH_VIEWS,
+  IMPACT_POLL_INTERVAL_MS,
+  IMPACT_STAGE_LABELS,
+  IMPACT_STATUSES,
+  TERMINAL_RUN_STATUSES,
+} from "@/lib/impact-analysis/constants";
+import {
+  formatPercent,
+  formatScore,
+  impactLabel,
+  safeCsvCell,
+} from "@/lib/impact-analysis/formatters";
 import type {
-  Evidence,
-  ImpactAnalysisSnapshot,
-  ImpactLevel,
-  ImpactResult,
-} from "@/lib/impact-analysis";
+  ImpactEvidence,
+  ImpactFinding,
+  ImpactGraph,
+  ImpactGraphView,
+  ImpactHistoryItem,
+  ImpactPlanningOptions,
+  ImpactRequirement,
+  ImpactRun,
+  ImpactRunComparison,
+  ImpactScopeType,
+  ImpactStatus,
+  ProjectRepository,
+  RepositoryBranch,
+} from "@/lib/impact-analysis/types";
 import { useWorkspaceContext } from "@/workspace-context";
+import { CopilotRemediationPanel } from "./copilot-remediation-prompt";
 
-type Filters = {
-  impact: string;
-  risk: string;
-  confidence: string;
-  planningStatus: string;
-  component: string;
-  reviewState: string;
-  action: string;
-};
-const emptyFilters: Filters = {
-  impact: "",
-  risk: "",
-  confidence: "",
-  planningStatus: "",
-  component: "",
-  reviewState: "",
-  action: "",
-};
-const levels: ImpactLevel[] = [
-  "CRITICAL",
-  "HIGH",
-  "MEDIUM",
-  "LOW",
-  "NO_IMPACT",
-  "UNKNOWN",
-];
-const label = (value: string) =>
-  value
-    .toLowerCase()
-    .split("_")
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-    .join(" ");
-const unique = (values: string[]) =>
-  Array.from(new Set(values.filter(Boolean))).sort();
-const confidence = (value: number) =>
-  value >= 0.8 ? "HIGH" : value >= 0.55 ? "MEDIUM" : "LOW";
-const matches = (result: ImpactResult, filters: Filters, search: string) => {
-  const text =
-    `${result.key} ${result.name} ${result.components.join(" ")} ${result.requiredAction}`.toLowerCase();
-  return (
-    (!search || text.includes(search.toLowerCase())) &&
-    (!filters.impact || result.impactLevel === filters.impact) &&
-    (!filters.risk || result.riskLevel === filters.risk) &&
-    (!filters.confidence ||
-      confidence(result.correlationConfidence) === filters.confidence) &&
-    (!filters.planningStatus ||
-      result.planningStatus === filters.planningStatus) &&
-    (!filters.component || result.components.includes(filters.component)) &&
-    (!filters.reviewState || result.reviewState === filters.reviewState) &&
-    (!filters.action || result.requiredAction === filters.action)
-  );
-};
+const emptyPlanning: ImpactPlanningOptions = { features: [], stories: [] };
+
+function messageFrom(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
 
 export function ImpactAnalysisDashboard() {
   const router = useRouter();
   const params = useSearchParams();
-  const contextProductSpaceId = useWorkspaceContext(
-    (state) => state.productSpaceId,
-  );
-  const contextProjectId = useWorkspaceContext((state) => state.projectId);
-  const contextReleaseId = useWorkspaceContext((state) => state.releaseId);
-  const productSpaceId =
-    contextProductSpaceId || params.get("productSpaceId") || "";
-  const projectId = contextProjectId || params.get("projectId") || "";
-  const releaseId = contextReleaseId || params.get("releaseId") || "";
+  const productSpaceId = useWorkspaceContext((state) => state.productSpaceId);
+  const projectId = useWorkspaceContext((state) => state.projectId);
+  const releaseId = useWorkspaceContext((state) => state.releaseId);
+  const environment = useWorkspaceContext((state) => state.environment);
   const project = useWorkspaceContext((state) => state.project);
   const release = useWorkspaceContext((state) => state.release);
-  const [data, setData] = useState<ImpactAnalysisSnapshot | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState<Filters>(emptyFilters);
-  const [featureId, setFeatureId] = useState(params.get("featureId") || "");
-  const [sprintId, setSprintId] = useState(params.get("sprintId") || "");
-  const [storyId, setStoryId] = useState(params.get("userStoryId") || "");
-  const [selected, setSelected] = useState<ImpactResult | null>(null);
-  const [tableMode, setTableMode] = useState<"features" | "stories">(
-    "features",
+
+  const [scopeType, setScopeType] = useState<ImpactScopeType>("FEATURE");
+  const [featureId, setFeatureId] = useState("");
+  const [storyId, setStoryId] = useState("");
+  const [repositoryId, setRepositoryId] = useState("");
+  const [branch, setBranch] = useState("");
+  const [planning, setPlanning] = useState(emptyPlanning);
+  const [repositories, setRepositories] = useState<ProjectRepository[]>([]);
+  const [branches, setBranches] = useState<RepositoryBranch[]>([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [selectorsLoading, setSelectorsLoading] = useState(false);
+  const [selectorError, setSelectorError] = useState("");
+  const [branchWarning, setBranchWarning] = useState("");
+
+  const [runId, setRunId] = useState(params.get("runId") || "");
+  const [run, setRun] = useState<ImpactRun | null>(null);
+  const [runLoading, setRunLoading] = useState(Boolean(runId));
+  const [submitting, setSubmitting] = useState(false);
+  const [runError, setRunError] = useState("");
+  const [requirements, setRequirements] = useState<ImpactRequirement[]>([]);
+  const [findings, setFindings] = useState<ImpactFinding[]>([]);
+  const [resultsLoading, setResultsLoading] = useState(false);
+  const [comparison, setComparison] = useState<ImpactRunComparison | null>(
+    null,
   );
+
+  const [graphView, setGraphView] = useState<ImpactGraphView>("comparison");
+  const [graph, setGraph] = useState<ImpactGraph | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState("");
+  const [historyItems, setHistoryItems] = useState<ImpactHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<ImpactStatus | "">("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [selectedFindingId, setSelectedFindingId] = useState("");
+  const [selectedFinding, setSelectedFinding] = useState<ImpactFinding | null>(
+    null,
+  );
+  const [evidence, setEvidence] = useState<ImpactEvidence[]>([]);
+  const [drawerLoading, setDrawerLoading] = useState(false);
+  const [drawerError, setDrawerError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const syncScope = useCallback(
-    (next: Record<string, string>) => {
+  const setRunUrl = useCallback(
+    (nextRunId: string) => {
       const query = new URLSearchParams(params.toString());
-      Object.entries(next).forEach(([key, value]) =>
-        value ? query.set(key, value) : query.delete(key),
-      );
-      router.replace(`?${query}`, { scroll: false });
+      if (nextRunId) query.set("runId", nextRunId);
+      else query.delete("runId");
+      router.replace(`?${query.toString()}`, { scroll: false });
+      setRunId(nextRunId);
     },
     [params, router],
   );
-  const load = useCallback(
-    async (run = false) => {
-      if (!productSpaceId || !projectId) {
-        setData(null);
-        return;
-      }
-      run ? setRunning(true) : setLoading(true);
-      setError("");
-      try {
-        const query = new URLSearchParams({ productSpaceId, projectId });
-        if (releaseId) query.set("releaseId", releaseId);
-        const response = await fetch(`/api/impact-analysis?${query}`, {
-          method: run ? "POST" : "GET",
-          cache: "no-store",
-        });
-        const body = await response.json();
-        if (!response.ok)
-          throw new Error(body.error || "Impact Analysis is unavailable.");
-        setData(body);
-        setSelected(null);
-        if (run) setNotice("A new compatible analysis snapshot is active.");
-      } catch (cause) {
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : "Impact Analysis is unavailable.",
-        );
-      } finally {
-        setLoading(false);
-        setRunning(false);
-      }
-    },
-    [productSpaceId, projectId, releaseId],
-  );
-  useEffect(() => void load(), [load]);
+
   useEffect(() => {
+    setScopeType("FEATURE");
     setFeatureId("");
-    setSprintId("");
     setStoryId("");
-    setFilters(emptyFilters);
-  }, [projectId, releaseId]);
+    setRepositoryId("");
+    setBranch("");
+    setPlanning(emptyPlanning);
+    setRepositories([]);
+    setBranches([]);
+    setRun(null);
+    setRequirements([]);
+    setFindings([]);
+    setComparison(null);
+    setGraph(null);
+    setSelectedFindingId("");
+    setSelectedFinding(null);
+    setRunUrl("");
+  }, [projectId, releaseId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 2600);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
+    if (!productSpaceId || !projectId) return;
+    const controller = new AbortController();
+    setSelectorsLoading(true);
+    setSelectorError("");
+    Promise.all([
+      getImpactPlanningOptions(
+        productSpaceId,
+        projectId,
+        releaseId || undefined,
+        controller.signal,
+      ),
+      getProjectRepositories(productSpaceId, projectId, controller.signal),
+    ])
+      .then(([options, linked]) => {
+        setPlanning(options);
+        setRepositories(linked.filter((repository) => !repository.archived));
+        setFeatureId((current) =>
+          options.features.some((feature) => feature.id === current)
+            ? current
+            : options.features[0]?.id || "",
+        );
+        setRepositoryId((current) =>
+          linked.some((repository) => repository.association_id === current)
+            ? current
+            : linked[0]?.association_id || "",
+        );
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted)
+          setSelectorError(
+            messageFrom(error, "Analysis selectors could not be loaded."),
+          );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSelectorsLoading(false);
+      });
+    return () => controller.abort();
+  }, [productSpaceId, projectId, releaseId]);
+
+  const selectedRepository = repositories.find(
+    (repository) => repository.association_id === repositoryId,
+  );
+
+  useEffect(() => {
+    if (!repositoryId || !selectedRepository) {
+      setBranches([]);
+      setBranch("");
+      return;
+    }
+    const controller = new AbortController();
+    setBranchWarning("");
+    setBranch(selectedRepository.default_branch);
+    setBranchesLoading(true);
+    getRepositoryBranches(selectedRepository.repository_url, controller.signal)
+      .then((items) => {
+        const next = items.length
+          ? items
+          : [{ name: selectedRepository.default_branch }];
+        setBranches(next);
+        setBranch((current) =>
+          next.some((item) => item.name === current)
+            ? current
+            : selectedRepository.default_branch,
+        );
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setBranches([{ name: selectedRepository.default_branch }]);
+        setBranchWarning(
+          `${messageFrom(error, "Branches could not be loaded.")} Using the repository default branch.`,
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setBranchesLoading(false);
+      });
+    return () => controller.abort();
+  }, [repositoryId, selectedRepository]);
+
+  const loadCompletedResults = useCallback(async (completedRunId: string) => {
+    setResultsLoading(true);
+    try {
+      const [nextRequirements, nextFindings] = await Promise.all([
+        getImpactRequirements(completedRunId),
+        getImpactFindings(completedRunId, { pageSize: 200 }),
+      ]);
+      setRequirements(nextRequirements);
+      setFindings(nextFindings);
+    } catch (error) {
+      setRunError(messageFrom(error, "Persisted results could not be loaded."));
+    } finally {
+      setResultsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!runId) {
+      setRunLoading(false);
+      return;
+    }
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const next = await getImpactRun(runId);
+        if (!active) return;
+        setRun(next);
+        setRunLoading(false);
+        setRunError("");
+        if (next.status === "COMPLETED") {
+          await loadCompletedResults(runId);
+          return;
+        }
+        if (!TERMINAL_RUN_STATUSES.has(next.status))
+          timer = setTimeout(poll, IMPACT_POLL_INTERVAL_MS);
+      } catch (error) {
+        if (!active) return;
+        setRunLoading(false);
+        setRunError(
+          messageFrom(error, "The analysis run could not be loaded."),
+        );
+      }
+    };
+    setRunLoading(true);
+    void poll();
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [runId, loadCompletedResults]);
+
+  useEffect(() => {
+    if (!runId || run?.status !== "COMPLETED") return;
+    const controller = new AbortController();
+    setGraphLoading(true);
+    setGraphError("");
+    getImpactGraph(runId, graphView, controller.signal)
+      .then(setGraph)
+      .catch((error) => {
+        if (!controller.signal.aborted)
+          setGraphError(messageFrom(error, "Graph evidence is unavailable."));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setGraphLoading(false);
+      });
+    return () => controller.abort();
+  }, [runId, run?.status, graphView]);
+
+  useEffect(() => {
+    if (!runId || run?.status !== "COMPLETED" || !run.previous_run_id) {
+      setComparison(null);
+      return;
+    }
+    const controller = new AbortController();
+    getImpactComparison(runId, run.previous_run_id, controller.signal)
+      .then(setComparison)
+      .catch(() => setComparison(null));
+    return () => controller.abort();
+  }, [runId, run?.status, run?.previous_run_id]);
+
+  const refreshHistory = useCallback(() => {
+    if (!productSpaceId || !projectId) return;
+    setHistoryLoading(true);
+    setHistoryError("");
+    void getImpactHistory({ productSpaceId, projectId })
+      .then((response) => setHistoryItems(response.items))
+      .catch((error) =>
+        setHistoryError(messageFrom(error, "Analysis history is unavailable.")),
+      )
+      .finally(() => setHistoryLoading(false));
+  }, [productSpaceId, projectId]);
+
+  useEffect(() => refreshHistory(), [refreshHistory, run?.status]);
+
+  useEffect(() => {
+    if (!selectedFindingId) return;
+    const controller = new AbortController();
+    setDrawerLoading(true);
+    setDrawerError("");
+    Promise.all([
+      getImpactFinding(selectedFindingId, controller.signal),
+      getFindingEvidence(selectedFindingId, controller.signal),
+    ])
+      .then(([finding, items]) => {
+        setSelectedFinding(finding);
+        setEvidence(items);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted)
+          setDrawerError(
+            messageFrom(error, "Finding evidence is unavailable."),
+          );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setDrawerLoading(false);
+      });
+    return () => controller.abort();
+  }, [selectedFindingId]);
 
   const scopedStories = useMemo(
-    () =>
-      (data?.stories || []).filter(
-        (story) => !featureId || story.parentFeatureId === featureId,
-      ),
-    [data, featureId],
+    () => planning.stories.filter((story) => story.featureId === featureId),
+    [planning.stories, featureId],
   );
-  const sprintOptions = useMemo(
-    () => unique(scopedStories.map((story) => story.sprintId || "")),
-    [scopedStories],
-  );
-  const features = useMemo(
-    () =>
-      (data?.features || [])
-        .filter((result) => !featureId || result.recordId === featureId)
-        .filter((result) => matches(result, filters, search)),
-    [data, featureId, filters, search],
-  );
-  const stories = useMemo(
-    () =>
-      (data?.stories || [])
-        .filter((result) => !featureId || result.parentFeatureId === featureId)
-        .filter((result) => !sprintId || result.sprintId === sprintId)
-        .filter((result) => !storyId || result.recordId === storyId)
-        .filter((result) => matches(result, filters, search)),
-    [data, featureId, sprintId, storyId, filters, search],
-  );
-  const results = useMemo(() => [...features, ...stories], [features, stories]);
-  const all = [...(data?.features || []), ...(data?.stories || [])];
-  const activeCount =
-    Object.values(filters).filter(Boolean).length +
-    [search, featureId, sprintId, storyId].filter(Boolean).length;
-  const actions = useMemo(() => {
-    const groups = new Map<string, ImpactResult[]>();
-    results.forEach((result) =>
-      groups.set(result.requiredAction, [
-        ...(groups.get(result.requiredAction) || []),
-        result,
-      ]),
+
+  useEffect(() => {
+    if (scopeType === "FEATURE") {
+      setStoryId("");
+      return;
+    }
+    setStoryId((current) =>
+      scopedStories.some((story) => story.id === current)
+        ? current
+        : scopedStories[0]?.id || "",
     );
-    return [...groups.entries()].sort(
-      (left, right) =>
-        Math.max(...right[1].map((item) => item.deliveryRisk || 0)) -
-        Math.max(...left[1].map((item) => item.deliveryRisk || 0)),
+  }, [scopeType, scopedStories]);
+
+  const categories = useMemo(
+    () =>
+      Array.from(new Set(findings.map((finding) => finding.category))).sort(),
+    [findings],
+  );
+  const visibleFindings = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return findings.filter(
+      (finding) =>
+        (!statusFilter || finding.status === statusFilter) &&
+        (!categoryFilter || finding.category === categoryFilter) &&
+        (!query ||
+          [
+            finding.requirement,
+            finding.category,
+            finding.technical_reason,
+            finding.recommendation,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(query)),
     );
-  }, [results]);
-  const setFilter = (key: keyof Filters, value: string) =>
-    setFilters((current) => ({ ...current, [key]: value }));
-  const clear = () => {
-    setFilters(emptyFilters);
-    setSearch("");
-    setFeatureId("");
-    setSprintId("");
-    setStoryId("");
-    syncScope({ featureId: "", sprintId: "", userStoryId: "" });
+  }, [findings, statusFilter, categoryFilter, search]);
+
+  const canSubmit =
+    Boolean(
+      productSpaceId && projectId && featureId && repositoryId && branch,
+    ) &&
+    (scopeType === "FEATURE" || Boolean(storyId));
+
+  const start = async () => {
+    if (!productSpaceId || !projectId || !canSubmit) return;
+    setSubmitting(true);
+    setRunError("");
+    try {
+      const next = await startImpactAnalysis({
+        product_space_id: productSpaceId,
+        project_id: projectId,
+        release_id: releaseId || null,
+        scope_type: scopeType,
+        scope_id: scopeType === "FEATURE" ? featureId : storyId,
+        project_repository_id: repositoryId,
+        ref: branch,
+        force_repository_refresh: false,
+        client_request_id: crypto.randomUUID(),
+      });
+      setRun(next);
+      setRequirements([]);
+      setFindings([]);
+      setGraph(null);
+      setRunUrl(next.run_id);
+    } catch (error) {
+      setRunError(messageFrom(error, "Impact Analysis could not be started."));
+    } finally {
+      setSubmitting(false);
+    }
   };
+
   const share = async () => {
-    if (!data) return;
-    const url = new URL(window.location.href);
-    url.searchParams.set("snapshot", data.snapshot.id);
-    await navigator.clipboard.writeText(url.toString());
-    setNotice("Snapshot link copied.");
+    if (!runId) return;
+    await navigator.clipboard.writeText(window.location.href);
+    setNotice("Immutable run link copied.");
   };
+
   const exportCsv = () => {
-    if (!data) return;
-    const cell = (value: unknown) =>
-      `"${String(value ?? "").replaceAll('"', '""')}"`;
-    const rows = results.map((result) => [
-      data.snapshot.id,
-      result.recordType,
-      result.key,
-      result.name,
-      result.impactLevel,
-      result.impactScore ?? "Unknown",
-      result.deliveryRisk ?? "Unknown",
-      result.riskLevel,
-      `${Math.round(result.correlationConfidence * 100)}%`,
-      result.components.join("; "),
-      result.requiredAction,
-      result.evidence.map((item) => item.id).join("; "),
+    if (!run) return;
+    const rows = visibleFindings.map((finding) => [
+      run.run_id,
+      run.repository?.commit_sha || "",
+      finding.requirement_id,
+      finding.requirement,
+      finding.status,
+      finding.confidence == null ? "" : finding.confidence,
+      finding.what_present || "",
+      finding.what_missing || "",
+      finding.technical_reason || "",
+      finding.impact || "",
+      finding.recommendation || "",
+      finding.evidence_count,
+      finding.score_contribution ?? "",
     ]);
     const csv = [
       [
-        "Snapshot",
-        "Type",
-        "Key",
-        "Name",
-        "Impact",
-        "Impact score",
-        "Delivery risk",
-        "Risk",
+        "Run ID",
+        "Commit SHA",
+        "Requirement ID",
+        "Requirement",
+        "Status",
         "Confidence",
-        "Components",
-        "Action",
-        "Evidence",
+        "What Present",
+        "What Missing",
+        "Technical Reason",
+        "Impact",
+        "Recommendation",
+        "Evidence Count",
+        "Score Contribution",
       ],
       ...rows,
     ]
-      .map((row) => row.map(cell).join(","))
+      .map((row) => row.map(safeCsvCell).join(","))
       .join("\r\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const url = URL.createObjectURL(
+      new Blob([csv], { type: "text/csv;charset=utf-8" }),
+    );
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${data.snapshot.id}-impact-analysis.csv`;
+    anchor.download = `${run.run_id}-impact-analysis.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
 
+  const reanalyze = async () => {
+    if (!runId) return;
+    setSubmitting(true);
+    try {
+      const response = await reanalyzeImpactRun(runId);
+      setNotice(`Re-analysis started from ${response.previous_run_id}.`);
+      setRunUrl(response.new_run_id);
+    } catch (error) {
+      setRunError(messageFrom(error, "Re-analysis could not be started."));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
-    <main className="dashboard impact-dashboard">
+    <main className="dashboard impact-dashboard impact-evidence-dashboard">
       <div className="source-back">
         <Link href="/data-sources">Data Sources</Link>
         <ChevronRight />
         <span>Impact Analysis</span>
       </div>
-      <div className="impact-heading">
+
+      <header className="impact-heading">
         <div>
-          <span className="eyebrow">PROJECT INTELLIGENCE</span>
+          <span className="eyebrow">BACKEND-DRIVEN PROJECT INTELLIGENCE</span>
           <h1>Impact Analysis</h1>
           <p>
-            Investigate architectural effect and delivery risk for{" "}
+            Evidence-backed implementation analysis for{" "}
             <b>{project?.name || "the selected Project"}</b>
             {release?.name ? `, ${release.name}` : ""}.
           </p>
         </div>
         <div>
-          <button className="secondary" onClick={share} disabled={!data}>
+          <button className="secondary" onClick={share} disabled={!runId}>
             <Copy /> Share
           </button>
-          <button onClick={() => void load(true)} disabled={running}>
-            <RefreshCw className={running ? "spin" : ""} />
-            {running ? "Analyzing" : "Run analysis"}
+          <button
+            className="secondary"
+            onClick={exportCsv}
+            disabled={!run || !visibleFindings.length}
+          >
+            <Download /> CSV
+          </button>
+          <button
+            className="secondary"
+            onClick={() => window.print()}
+            disabled={!run}
+          >
+            <Printer /> PDF
           </button>
         </div>
-      </div>
+      </header>
+
       {notice && (
         <div className="impact-notice" role="status">
           <CheckCircle2 /> {notice}
         </div>
       )}
+
       {!productSpaceId || !projectId ? (
-        <State
-          icon={<Waypoints />}
+        <ImpactState
           title={
             !productSpaceId ? "Select a Product Space" : "Select a Project"
           }
-          text="Impact Analysis inherits its authoritative scope from Workspace Context."
+          text="Impact Analysis inherits Product Space, Project, Release, and Environment from Workspace Context."
         />
-      ) : error ? (
-        <State
-          icon={<AlertCircle />}
-          title="Impact analysis unavailable"
-          text={error}
-          action="Try again"
-          onAction={() => void load()}
-          error
-        />
-      ) : loading ? (
-        <Loading />
-      ) : data ? (
+      ) : (
         <>
-          <Snapshot data={data} />
-          <Scope
-            data={data}
-            featureId={featureId}
-            sprintId={sprintId}
-            storyId={storyId}
-            stories={scopedStories}
-            sprints={sprintOptions}
-            setFeature={(value) => {
-              setFeatureId(value);
-              setSprintId("");
-              setStoryId("");
-              syncScope({ featureId: value, sprintId: "", userStoryId: "" });
-            }}
-            setSprint={(value) => {
-              setSprintId(value);
-              setStoryId("");
-              syncScope({ sprintId: value, userStoryId: "" });
-            }}
-            setStory={(value) => {
-              setStoryId(value);
-              syncScope({ userStoryId: value });
-            }}
-          />
-          <Summary data={data} setFilter={setFilter} setMode={setTableMode} />
-          <section className="impact-filter-bar">
-            <label className="impact-search">
-              <Search />
-              <input
-                aria-label="Search impact records"
-                placeholder="Search records or components"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </label>
-            <FilterSelect
-              name="Impact"
-              value={filters.impact}
-              values={levels}
-              set={(value) => setFilter("impact", value)}
-            />
-            <FilterSelect
-              name="Risk"
-              value={filters.risk}
-              values={levels}
-              set={(value) => setFilter("risk", value)}
-            />
-            <FilterSelect
-              name="Confidence"
-              value={filters.confidence}
-              values={["HIGH", "MEDIUM", "LOW"]}
-              set={(value) => setFilter("confidence", value)}
-            />
-            <details className="impact-more">
-              <summary>
-                <SlidersHorizontal /> More
-                {activeCount > 0 && <span>{activeCount}</span>}
-              </summary>
+          <section className="card impact-config-card">
+            <div className="impact-config-heading">
               <div>
-                <FilterSelect
-                  name="Planning status"
-                  value={filters.planningStatus}
-                  values={unique(all.map((item) => item.planningStatus))}
-                  set={(value) => setFilter("planningStatus", value)}
-                />
-                <FilterSelect
-                  name="Component"
-                  value={filters.component}
-                  values={unique(all.flatMap((item) => item.components))}
-                  set={(value) => setFilter("component", value)}
-                />
-                <FilterSelect
-                  name="Review state"
-                  value={filters.reviewState}
-                  values={unique(all.map((item) => item.reviewState))}
-                  set={(value) => setFilter("reviewState", value)}
-                />
-                <FilterSelect
-                  name="Required action"
-                  value={filters.action}
-                  values={unique(all.map((item) => item.requiredAction))}
-                  set={(value) => setFilter("action", value)}
-                />
+                <span className="eyebrow">ANALYSIS REQUEST</span>
+                <h2>Choose implementation scope</h2>
               </div>
-            </details>
-            {activeCount > 0 && (
-              <button className="impact-clear" onClick={clear}>
-                <X /> Clear
-              </button>
+              {selectorsLoading && (
+                <span className="impact-inline-loading">
+                  <LoaderCircle className="spin" /> Loading selectors
+                </span>
+              )}
+            </div>
+            {selectorError && <InlineError message={selectorError} />}
+            <div className="impact-config-grid">
+              <fieldset className="impact-radio-group">
+                <legend>Analysis level</legend>
+                {(["FEATURE", "USER_STORY"] as ImpactScopeType[]).map(
+                  (type) => (
+                    <label key={type}>
+                      <input
+                        type="radio"
+                        checked={scopeType === type}
+                        onChange={() => setScopeType(type)}
+                      />
+                      {impactLabel(type)}
+                    </label>
+                  ),
+                )}
+              </fieldset>
+              <SelectField
+                label="Feature"
+                value={featureId}
+                set={(value) => {
+                  setFeatureId(value);
+                  setStoryId("");
+                }}
+                items={planning.features.map((feature) => ({
+                  id: feature.id,
+                  label: `${feature.key} · ${feature.name}`,
+                }))}
+                empty="No Features available"
+              />
+              {scopeType === "USER_STORY" && (
+                <SelectField
+                  label="User Story"
+                  value={storyId}
+                  set={setStoryId}
+                  items={scopedStories.map((story) => ({
+                    id: story.id,
+                    label: `${story.key} · ${story.name}`,
+                  }))}
+                  empty="No User Stories for this Feature"
+                />
+              )}
+              <SelectField
+                label="GitHub repository"
+                value={repositoryId}
+                set={setRepositoryId}
+                items={repositories.map((repository) => ({
+                  id: repository.association_id,
+                  label: repository.full_name,
+                }))}
+                empty="No linked repositories"
+              />
+              <SelectField
+                label="Branch / ref"
+                value={branch}
+                set={setBranch}
+                disabled={branchesLoading}
+                items={branches.map((item) => ({
+                  id: item.name,
+                  label: item.name,
+                }))}
+                empty={
+                  branchesLoading
+                    ? "Loading branches..."
+                    : "No branches available"
+                }
+              />
+            </div>
+            {branchWarning && <p className="impact-warning">{branchWarning}</p>}
+            {!repositories.length && !selectorsLoading && (
+              <p className="impact-empty-inline">
+                No GitHub repository is connected to this Project.{" "}
+                <Link href="/data-sources/github">
+                  Go to GitHub Data Source
+                </Link>
+              </p>
             )}
-          </section>
-          {!results.length ? (
-            <State
-              icon={<Filter />}
-              title="No records match these filters"
-              text="Clear or adjust the dashboard filters to restore contributing records."
-              action="Clear filters"
-              onAction={clear}
-            />
-          ) : (
-            <>
-              <div className="impact-overview-grid">
-                <ArchitectureMap
-                  data={data}
-                  results={results}
-                  onComponent={(value) =>
-                    setFilter(
-                      "component",
-                      filters.component === value ? "" : value,
-                    )
+            <div className="impact-request-preview">
+              <dl>
+                <Preview label="Project" value={project?.name} />
+                <Preview
+                  label="Release"
+                  value={release?.name || "All Releases"}
+                />
+                <Preview
+                  label="Environment"
+                  value={environment?.name || "All Environments"}
+                />
+                <Preview label="Level" value={impactLabel(scopeType)} />
+                <Preview
+                  label="Work item"
+                  value={
+                    scopeType === "FEATURE"
+                      ? planning.features.find((item) => item.id === featureId)
+                          ?.key
+                      : scopedStories.find((item) => item.id === storyId)?.key
                   }
                 />
-                <Distribution results={results} setFilter={setFilter} />
-              </div>
-              <div className="impact-work-grid">
-                <ResultsTable
-                  mode={tableMode}
-                  setMode={setTableMode}
-                  features={features}
-                  stories={stories}
-                  select={setSelected}
-                  exportCsv={exportCsv}
+                <Preview
+                  label="Repository"
+                  value={selectedRepository?.full_name}
                 />
-                <Actions actions={actions} select={setSelected} />
-              </div>
+                <Preview label="Ref" value={branch} />
+              </dl>
+              <button onClick={start} disabled={!canSubmit || submitting}>
+                {submitting ? <LoaderCircle className="spin" /> : <Play />}
+                {submitting ? "Submitting" : "Run Impact Analysis"}
+              </button>
+            </div>
+          </section>
+
+          {runError && <InlineError message={runError} />}
+          {runLoading && !run && (
+            <ImpactState
+              title="Loading saved analysis"
+              text="Retrieving the persisted run and its exact repository version."
+              loading
+            />
+          )}
+          {run && <RunProgress run={run} />}
+
+          {run?.status === "COMPLETED" && (
+            <>
+              <RunSummary run={run} onReanalyze={reanalyze} busy={submitting} />
+              {resultsLoading ? (
+                <ImpactState
+                  title="Loading persisted results"
+                  text="Loading atomic requirements and backend-classified findings."
+                  loading
+                />
+              ) : (
+                <div className="impact-result-layout">
+                  <div className="impact-result-main">
+                    {comparison && <ComparisonPanel comparison={comparison} />}
+                    <RequirementsPanel requirements={requirements} />
+                    <section className="card impact-findings-card">
+                      <SectionHeading
+                        eyebrow="IMPLEMENTATION FINDINGS"
+                        title="Evidence-backed findings"
+                        aside={`${visibleFindings.length} of ${findings.length}`}
+                      />
+                      <div className="impact-finding-filters">
+                        <label>
+                          <Search />
+                          <input
+                            aria-label="Search findings"
+                            value={search}
+                            onChange={(event) => setSearch(event.target.value)}
+                            placeholder="Search requirement, reason, recommendation"
+                          />
+                        </label>
+                        <select
+                          aria-label="Filter by status"
+                          value={statusFilter}
+                          onChange={(event) =>
+                            setStatusFilter(
+                              event.target.value as ImpactStatus | "",
+                            )
+                          }
+                        >
+                          <option value="">All statuses</option>
+                          {IMPACT_STATUSES.map((status) => (
+                            <option key={status}>{status}</option>
+                          ))}
+                        </select>
+                        <select
+                          aria-label="Filter by category"
+                          value={categoryFilter}
+                          onChange={(event) =>
+                            setCategoryFilter(event.target.value)
+                          }
+                        >
+                          <option value="">All categories</option>
+                          {categories.map((category) => (
+                            <option key={category}>{category}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <FindingsTable
+                        findings={visibleFindings}
+                        select={setSelectedFindingId}
+                      />
+                    </section>
+                    <GraphPanel
+                      graph={graph}
+                      view={graphView}
+                      setView={setGraphView}
+                      loading={graphLoading}
+                      error={graphError}
+                    />
+                  </div>
+                  <HistoryPanel
+                    items={historyItems}
+                    activeRunId={runId}
+                    loading={historyLoading}
+                    error={historyError}
+                    open={setRunUrl}
+                    refresh={refreshHistory}
+                  />
+                </div>
+              )}
             </>
           )}
         </>
-      ) : null}
-      {selected && (
-        <EvidenceDrawer result={selected} close={() => setSelected(null)} />
+      )}
+
+      {selectedFindingId && (
+        <FindingDrawer
+          finding={selectedFinding}
+          evidence={evidence}
+          run={run}
+          repositories={repositories}
+          loading={drawerLoading}
+          error={drawerError}
+          close={() => {
+            setSelectedFindingId("");
+            setSelectedFinding(null);
+            setEvidence([]);
+          }}
+        />
       )}
     </main>
   );
 }
 
-function Snapshot({ data }: { data: ImpactAnalysisSnapshot }) {
-  const partial = data.snapshot.status === "PARTIAL";
-  return (
-    <section className={`impact-snapshot ${partial ? "partial" : "current"}`}>
-      {partial ? <AlertCircle /> : <CheckCircle2 />}
-      <div>
-        <strong>
-          {partial ? "Partial analysis" : "Current analysis snapshot"}
-        </strong>
-        <span>
-          {data.snapshot.id} · Architecture {data.snapshot.architectureVersion}{" "}
-          · Algorithm {data.snapshot.algorithmVersion}
-        </span>
-      </div>
-      <span>
-        <Clock3 /> {new Date(data.snapshot.analyzedAt).toLocaleString()}
-      </span>
-    </section>
-  );
-}
-
-function Scope({
-  data,
-  featureId,
-  sprintId,
-  storyId,
-  stories,
-  sprints,
-  setFeature,
-  setSprint,
-  setStory,
-}: {
-  data: ImpactAnalysisSnapshot;
-  featureId: string;
-  sprintId: string;
-  storyId: string;
-  stories: ImpactResult[];
-  sprints: string[];
-  setFeature: (value: string) => void;
-  setSprint: (value: string) => void;
-  setStory: (value: string) => void;
-}) {
-  return (
-    <section className="card impact-scope">
-      <div>
-        <span className="eyebrow">ANALYSIS SCOPE</span>
-        <strong>{data.snapshot.scope.projectName}</strong>
-        <small>Optional filters narrow every dashboard view.</small>
-      </div>
-      <ScopeSelect
-        name="Feature"
-        value={featureId}
-        set={setFeature}
-        items={data.features.map((item) => [
-          item.recordId,
-          `${item.key} · ${item.name}`,
-        ])}
-      />
-      <ScopeSelect
-        name="Sprint"
-        value={sprintId}
-        set={setSprint}
-        items={sprints.map((id) => [id, `Sprint ${id.slice(0, 8)}`])}
-      />
-      <ScopeSelect
-        name="User Story"
-        value={storyId}
-        set={setStory}
-        items={stories
-          .filter((item) => !sprintId || item.sprintId === sprintId)
-          .map((item) => [item.recordId, `${item.key} · ${item.name}`])}
-      />
-    </section>
-  );
-}
-
-function ScopeSelect({
-  name,
+function SelectField({
+  label,
   value,
-  items,
   set,
+  items,
+  empty,
+  disabled = false,
 }: {
-  name: string;
+  label: string;
   value: string;
-  items: string[][];
   set: (value: string) => void;
+  items: Array<{ id: string; label: string }>;
+  empty: string;
+  disabled?: boolean;
 }) {
   return (
-    <label>
-      <span>{name}</span>
-      <select value={value} onChange={(event) => set(event.target.value)}>
-        <option value="">
-          All {name === "User Story" ? "User Stories" : `${name}s`}
-        </option>
-        {items.map(([id, itemLabel]) => (
-          <option key={id} value={id}>
-            {itemLabel}
+    <label className="impact-select-field">
+      <span>{label}</span>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => set(event.target.value)}
+      >
+        {!items.length && <option value="">{empty}</option>}
+        {items.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
           </option>
         ))}
       </select>
@@ -572,498 +824,618 @@ function ScopeSelect({
   );
 }
 
-function Summary({
-  data,
-  setFilter,
-  setMode,
+function Preview({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value || "Not selected"}</dd>
+    </div>
+  );
+}
+
+function RunProgress({ run }: { run: ImpactRun }) {
+  const timeline = run.timeline || [];
+  const currentStep =
+    timeline.find((item) =>
+      ["ACTIVE", "FAILED", "CANCELLED"].includes(item.status),
+    ) || timeline[timeline.length - 1];
+  const stage =
+    currentStep?.label ||
+    IMPACT_STAGE_LABELS[run.stage] ||
+    impactLabel(run.stage);
+  const failed = run.status === "FAILED";
+  const completed = run.status === "COMPLETED";
+  return (
+    <section className="card impact-progress-card" aria-live="polite">
+      <div className="impact-progress-header">
+        {failed ? (
+          <AlertCircle />
+        ) : completed ? (
+          <CheckCircle2 />
+        ) : (
+          <LoaderCircle className="spin" />
+        )}
+        <div>
+          <span className="eyebrow">BACKEND PIPELINE · {run.status}</span>
+          <h2>{stage || "Impact Analysis is running"}</h2>
+          <p>
+            {run.message || "The backend is processing persisted evidence."}
+          </p>
+        </div>
+        <strong>{Math.round(run.progress_percent)}%</strong>
+      </div>
+      <progress value={run.progress_percent} max={100}>
+        {run.progress_percent}%
+      </progress>
+      {!!timeline.length && (
+        <ol className="impact-pipeline" aria-label="Backend analysis pipeline">
+          {timeline.map((item) => (
+            <li
+              className={`impact-pipeline-step ${item.status.toLowerCase()}`}
+              key={item.stage}
+            >
+              <span className="impact-step-marker" aria-hidden="true">
+                {item.status === "COMPLETED" ? (
+                  <CheckCircle2 />
+                ) : item.status === "FAILED" ? (
+                  <X />
+                ) : item.status === "ACTIVE" ? (
+                  <LoaderCircle className="spin" />
+                ) : (
+                  <Clock3 />
+                )}
+              </span>
+              <span className="impact-step-copy">
+                <strong>{item.label}</strong>
+                <small>{item.message || impactLabel(item.status)}</small>
+              </span>
+              <small>{item.progress_percent}%</small>
+            </li>
+          ))}
+        </ol>
+      )}
+      {run.error && (
+        <details className="impact-backend-error" open>
+          <summary>
+            Backend error · {run.error.code} ·{" "}
+            {IMPACT_STAGE_LABELS[run.error.stage] ||
+              impactLabel(run.error.stage)}
+          </summary>
+          <pre>{run.error.message}</pre>
+        </details>
+      )}
+      <small className="impact-run-id">Run {run.run_id}</small>
+    </section>
+  );
+}
+
+function RunSummary({
+  run,
+  onReanalyze,
+  busy,
 }: {
-  data: ImpactAnalysisSnapshot;
-  setFilter: (key: keyof Filters, value: string) => void;
-  setMode: (value: "features" | "stories") => void;
+  run: ImpactRun;
+  onReanalyze: () => void;
+  busy: boolean;
 }) {
-  const metrics = [
-    [
-      "Architecture components",
-      data.summary.architectureComponents,
-      <Network key="architecture" />,
-    ],
-    [
-      "Analyzed Features",
-      data.summary.analyzedFeatures,
-      <FileSearch key="analyzed" />,
-    ],
-    [
-      "Impacted Features",
-      data.summary.impactedFeatures,
-      <GitBranch key="impacted" />,
-    ],
-    [
-      "High-risk Features",
-      data.summary.highRiskFeatures,
-      <ShieldAlert key="high-risk" />,
-    ],
-    [
-      "Impacted User Stories",
-      data.summary.impactedStories,
-      <Waypoints key="stories" />,
-    ],
-    [
-      "Unmapped Features",
-      data.summary.unmappedFeatures,
-      <AlertCircle key="unmapped" />,
-    ],
-    [
-      "Overall project risk",
-      label(data.summary.overallProjectRisk),
-      <CircleGauge key="overall" />,
-    ],
-  ] as const;
-  const click = (index: number) => {
-    if (index === 3) setFilter("risk", "HIGH");
-    if (index === 5) setFilter("impact", "UNKNOWN");
-    if (index === 6) setFilter("risk", data.summary.overallProjectRisk);
-    setMode(index === 4 ? "stories" : "features");
+  const counts = run.counts || {
+    present: 0,
+    partial: 0,
+    missing: 0,
+    unknown: 0,
   };
   return (
-    <section className="impact-summary">
-      {metrics.map(([metric, value, icon], index) => (
-        <button
-          className="card impact-metric"
-          key={metric}
-          onClick={() => click(index)}
+    <section className="card impact-run-summary">
+      <div className="impact-run-context">
+        <span className="eyebrow">COMPLETED PERSISTED RUN</span>
+        <h2>{run.scope?.key || run.scope?.title || "Impact Analysis"}</h2>
+        <p>
+          <GitBranch /> {run.repository?.name || "Repository unavailable"} ·{" "}
+          {run.repository?.branch || "Unknown ref"}
+        </p>
+        <code title={run.repository?.commit_sha || ""}>
+          {run.repository?.commit_sha || "Commit SHA unavailable"}
+        </code>
+        <small>
+          <Clock3 />{" "}
+          {run.completed_at
+            ? new Date(run.completed_at).toLocaleString()
+            : "Completion time unavailable"}
+        </small>
+      </div>
+      <div className="impact-score-card">
+        <span>Implementation score</span>
+        <strong>{formatScore(run.score)}</strong>
+        <small>Backend-calculated</small>
+      </div>
+      {IMPACT_STATUSES.map((status) => (
+        <div
+          className={`impact-count-card ${status.toLowerCase()}`}
+          key={status}
         >
-          <span>{icon}</span>
-          <small>{metric}</small>
-          <strong>{value}</strong>
-          <ChevronRight />
-        </button>
+          <StatusBadge status={status} />
+          <strong>{counts[status.toLowerCase() as keyof typeof counts]}</strong>
+        </div>
       ))}
+      <button
+        className="secondary impact-reanalyze"
+        onClick={onReanalyze}
+        disabled={busy}
+      >
+        <RefreshCw className={busy ? "spin" : ""} /> Re-analyze
+      </button>
     </section>
   );
 }
 
-function ArchitectureMap({
-  data,
-  results,
-  onComponent,
+function RequirementsPanel({
+  requirements,
 }: {
-  data: ImpactAnalysisSnapshot;
-  results: ImpactResult[];
-  onComponent: (value: string) => void;
+  requirements: ImpactRequirement[];
 }) {
-  const components = data.components.filter((component) =>
-    results.some((result) => result.components.includes(component.name)),
-  );
   return (
-    <section className="card impact-map-card">
-      <SectionHead
-        eyebrow="ARCHITECTURE IMPACT MAP"
-        title="Impacted component paths"
-        note={`${components.length} in scope`}
+    <section className="card impact-requirements-card">
+      <SectionHeading
+        eyebrow="REQUIREMENTS ANALYZED"
+        title="Atomic requirements"
+        aside={String(requirements.length)}
       />
-      <div className="impact-map">
-        <i className="map-line horizontal" />
-        <i className="map-line vertical" />
-        {components.map((component) => (
-          <button
-            key={component.id}
-            className={`impact-node ${component.risk.toLowerCase()}`}
-            style={{ left: `${component.x}%`, top: `${component.y}%` }}
-            onClick={() => onComponent(component.name)}
-            aria-label={`${component.name}, ${label(component.risk)} risk`}
-          >
-            <Network />
-            <span>
-              <strong>{component.name}</strong>
-              <small>
-                {label(component.risk)} · {component.impactedRecords} records
-              </small>
-            </span>
-          </button>
-        ))}
+      {!requirements.length ? (
+        <p className="impact-empty-inline">
+          No atomic requirements were returned.
+        </p>
+      ) : (
+        <div className="impact-requirements-list">
+          {requirements.map((requirement) => (
+            <article key={requirement.requirement_id}>
+              <div>
+                <strong>{requirement.requirement_id}</strong>
+                <span>{impactLabel(requirement.type)}</span>
+              </div>
+              <p>{requirement.text}</p>
+              {requirement.status && (
+                <StatusBadge status={requirement.status} />
+              )}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ComparisonPanel({ comparison }: { comparison: ImpactRunComparison }) {
+  return (
+    <section className="card impact-comparison-card">
+      <SectionHeading
+        eyebrow="BEFORE AND AFTER"
+        title="Re-analysis comparison"
+        aside={`${comparison.requirement_changes.length} requirement changes`}
+      />
+      <div className="impact-comparison-scores">
+        <span>
+          Previous <b>{formatScore(comparison.previous_score)}</b>
+        </span>
+        <span>
+          New <b>{formatScore(comparison.new_score)}</b>
+        </span>
+        <span>
+          Delta <b>{formatScore(comparison.score_delta)}</b>
+        </span>
       </div>
-      <div className="impact-legend">
-        {["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"].map((level) => (
-          <span key={level}>
-            <i className={level.toLowerCase()} /> {label(level)}
-          </span>
+      <div className="impact-comparison-list">
+        {comparison.requirement_changes.map((item) => (
+          <article key={item.requirement_id}>
+            <strong>{item.requirement_id}</strong>
+            <span>{item.requirement}</span>
+            <small>{impactLabel(item.change)}</small>
+            <div>
+              {item.previous_status ? (
+                <StatusBadge status={item.previous_status} />
+              ) : (
+                <em>Not present</em>
+              )}
+              <ChevronRight />
+              {item.new_status ? (
+                <StatusBadge status={item.new_status} />
+              ) : (
+                <em>Removed</em>
+              )}
+            </div>
+          </article>
         ))}
       </div>
     </section>
   );
 }
 
-function Distribution({
-  results,
-  setFilter,
-}: {
-  results: ImpactResult[];
-  setFilter: (key: keyof Filters, value: string) => void;
-}) {
-  const counts = levels.map(
-    (level) => results.filter((result) => result.riskLevel === level).length,
-  );
-  const maximum = Math.max(1, ...counts);
-  return (
-    <section className="card risk-card">
-      <SectionHead
-        eyebrow="DELIVERY RISK"
-        title="Risk distribution"
-        note={`${results.length} records`}
-      />
-      <div className="risk-bars">
-        {levels.map((level, index) => (
-          <button key={level} onClick={() => setFilter("risk", level)}>
-            <span>{label(level)}</span>
-            <i>
-              <b
-                className={level.toLowerCase()}
-                style={{ width: `${(counts[index] / maximum) * 100}%` }}
-              />
-            </i>
-            <strong>{counts[index]}</strong>
-          </button>
-        ))}
-      </div>
-      <p>
-        <AlertCircle /> Unknown records need mapping evidence before a
-        conclusion.
-      </p>
-    </section>
-  );
-}
-
-function ResultsTable({
-  mode,
-  setMode,
-  features,
-  stories,
+function FindingsTable({
+  findings,
   select,
-  exportCsv,
 }: {
-  mode: "features" | "stories";
-  setMode: (value: "features" | "stories") => void;
-  features: ImpactResult[];
-  stories: ImpactResult[];
-  select: (value: ImpactResult) => void;
-  exportCsv: () => void;
+  findings: ImpactFinding[];
+  select: (id: string) => void;
 }) {
-  const rows = mode === "features" ? features : stories;
+  if (!findings.length)
+    return (
+      <p className="impact-empty-inline">
+        No findings match the current filters.
+      </p>
+    );
   return (
-    <section className="card impact-table-card">
-      <div className="impact-table-toolbar">
-        <div className="impact-tabs" role="tablist">
-          {(["features", "stories"] as const).map((tab) => (
+    <div className="impact-table-scroll">
+      <table className="impact-table impact-findings-table">
+        <thead>
+          <tr>
+            <th>Requirement</th>
+            <th>Category</th>
+            <th>Status</th>
+            <th>Confidence</th>
+            <th>Evidence</th>
+            <th>Score</th>
+            <th>Code fix</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {findings.map((finding) => (
+            <tr key={finding.finding_id}>
+              <td>
+                <strong>{finding.requirement_id}</strong>
+                <span>{finding.requirement}</span>
+              </td>
+              <td>{impactLabel(finding.category)}</td>
+              <td>
+                <StatusBadge status={finding.status} />
+              </td>
+              <td>{formatPercent(finding.confidence)}</td>
+              <td>{finding.evidence_count}</td>
+              <td>{formatScore(finding.score_contribution)}</td>
+              <td>{finding.code_generation_available ? "Eligible" : "No"}</td>
+              <td>
+                <button onClick={() => select(finding.finding_id)}>
+                  Review <ChevronRight />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function GraphPanel({
+  graph,
+  view,
+  setView,
+  loading,
+  error,
+}: {
+  graph: ImpactGraph | null;
+  view: ImpactGraphView;
+  setView: (view: ImpactGraphView) => void;
+  loading: boolean;
+  error: string;
+}) {
+  const names = new Map(
+    graph?.nodes.map((node) => [node.id, node.label]) || [],
+  );
+  return (
+    <section className="card impact-graph-card">
+      <SectionHeading
+        eyebrow="ARCHITECTURE EVIDENCE"
+        title="Expected versus actual graph"
+        aside={
+          graph
+            ? `${graph.nodes.length} nodes · ${graph.edges.length} edges`
+            : ""
+        }
+      />
+      <div className="impact-graph-tabs" role="tablist">
+        {IMPACT_GRAPH_VIEWS.map((item) => (
+          <button
+            key={item}
+            role="tab"
+            aria-selected={view === item}
+            className={view === item ? "active" : ""}
+            onClick={() => setView(item)}
+          >
+            {impactLabel(item)}
+          </button>
+        ))}
+      </div>
+      {loading ? (
+        <p className="impact-inline-loading">
+          <LoaderCircle className="spin" /> Loading {view} graph
+        </p>
+      ) : error ? (
+        <InlineError message={error} />
+      ) : !graph?.nodes.length ? (
+        <p className="impact-empty-inline">
+          No graph evidence is available for this view.
+        </p>
+      ) : (
+        <>
+          <div
+            className="impact-graph-nodes"
+            aria-label={`${impactLabel(view)} graph nodes`}
+          >
+            {graph.nodes.map((node) => (
+              <article
+                key={node.id}
+                className={(node.status || "unknown").toLowerCase()}
+              >
+                <Network />
+                <strong>{node.label}</strong>
+                <span>{node.type ? impactLabel(node.type) : "Node"}</span>
+                {node.status && <small>{impactLabel(node.status)}</small>}
+              </article>
+            ))}
+          </div>
+          <div className="impact-edge-list">
+            <h3>Relationships</h3>
+            {graph.edges.map((edge, index) => (
+              <div key={edge.id || `${edge.source}-${edge.target}-${index}`}>
+                <span>{names.get(edge.source) || edge.source}</span>
+                <b>{edge.label || edge.type || "RELATES_TO"}</b>
+                <span>{names.get(edge.target) || edge.target}</span>
+                {edge.status && <em>{impactLabel(edge.status)}</em>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function HistoryPanel({
+  items,
+  activeRunId,
+  loading,
+  error,
+  open,
+  refresh,
+}: {
+  items: ImpactHistoryItem[];
+  activeRunId: string;
+  loading: boolean;
+  error: string;
+  open: (runId: string) => void;
+  refresh: () => void;
+}) {
+  return (
+    <aside className="card impact-history-card">
+      <SectionHeading
+        eyebrow="AUDITABLE HISTORY"
+        title="Previous runs"
+        aside={
+          <button onClick={refresh} aria-label="Refresh analysis history">
+            <RefreshCw />
+          </button>
+        }
+      />
+      {loading ? (
+        <p className="impact-inline-loading">
+          <LoaderCircle className="spin" /> Loading history
+        </p>
+      ) : error ? (
+        <InlineError message={error} />
+      ) : !items.length ? (
+        <p className="impact-empty-inline">
+          No persisted runs exist for this Project.
+        </p>
+      ) : (
+        <div className="impact-history-list">
+          {items.map((item) => (
             <button
-              key={tab}
-              className={mode === tab ? "active" : ""}
-              onClick={() => setMode(tab)}
-              role="tab"
-              aria-selected={mode === tab}
+              key={item.run_id}
+              className={item.run_id === activeRunId ? "active" : ""}
+              onClick={() => open(item.run_id)}
             >
-              {tab === "features" ? "Features" : "User Stories"}{" "}
+              <History />
               <span>
-                {tab === "features" ? features.length : stories.length}
+                <strong>{item.scope?.key || item.run_id}</strong>
+                <small>
+                  {item.repository?.branch || "Unknown ref"} ·{" "}
+                  {item.repository?.commit_sha?.slice(0, 8) || "No commit"}
+                </small>
+                <small>
+                  {item.completed_at
+                    ? new Date(item.completed_at).toLocaleString()
+                    : impactLabel(item.status)}
+                </small>
               </span>
+              <b>{formatScore(item.score)}</b>
             </button>
           ))}
         </div>
-        <div>
-          <button title="Export visible records to CSV" onClick={exportCsv}>
-            <ArrowDownToLine /> CSV
-          </button>
-          <button
-            title="Open print dialog for PDF"
-            onClick={() => window.print()}
-          >
-            <Printer /> PDF
-          </button>
-        </div>
-      </div>
-      <div className="impact-table-scroll">
-        <table className="impact-table">
-          <thead>
-            <tr>
-              <th>Record</th>
-              <th>Impact</th>
-              <th>Delivery risk</th>
-              <th>Confidence</th>
-              <th>Components</th>
-              <th>Required action</th>
-              <th>Evidence</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((result) => (
-              <tr key={result.id}>
-                <td>
-                  <button
-                    className="record-link"
-                    onClick={() => select(result)}
-                  >
-                    <span>{result.key}</span>
-                    <strong>{result.name}</strong>
-                    <small>{label(result.planningStatus)}</small>
-                  </button>
-                </td>
-                <td>
-                  <Badge level={result.impactLevel} />
-                  <small>
-                    {result.impactScore == null
-                      ? "Not scored"
-                      : `${result.impactScore}/100`}
-                  </small>
-                </td>
-                <td>
-                  <Badge level={result.riskLevel} />
-                  <small>
-                    {result.deliveryRisk == null
-                      ? "Not scored"
-                      : `${result.deliveryRisk}/100`}
-                  </small>
-                </td>
-                <td>
-                  <strong>
-                    {Math.round(result.correlationConfidence * 100)}%
-                  </strong>
-                  <small>
-                    {label(confidence(result.correlationConfidence))}
-                  </small>
-                </td>
-                <td>
-                  <div className="component-list">
-                    {result.components.length ? (
-                      result.components
-                        .slice(0, 2)
-                        .map((component) => (
-                          <span key={component}>{component}</span>
-                        ))
-                    ) : (
-                      <em>Unmapped</em>
-                    )}
-                  </div>
-                </td>
-                <td>{result.requiredAction}</td>
-                <td>
-                  <button
-                    className="evidence-count"
-                    onClick={() => select(result)}
-                  >
-                    <FileSearch /> {result.evidence.length}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
+      )}
+    </aside>
   );
 }
 
-function Actions({
-  actions,
-  select,
-}: {
-  actions: Array<[string, ImpactResult[]]>;
-  select: (value: ImpactResult) => void;
-}) {
-  return (
-    <section className="card actions-card">
-      <SectionHead
-        eyebrow="NEXT ACTIONS"
-        title="Prioritized recommendations"
-        icon={<Sparkles />}
-      />
-      <div>
-        {actions.map(([action, records], index) => (
-          <button key={action} onClick={() => select(records[0])}>
-            <span>{index + 1}</span>
-            <div>
-              <strong>{action}</strong>
-              <small>
-                {records.length} records · Highest risk{" "}
-                {Math.max(...records.map((record) => record.deliveryRisk || 0))}
-              </small>
-            </div>
-            <ChevronRight />
-          </button>
-        ))}
-      </div>
-      <p>
-        Recommendations are advisory and never change official planning status
-        without human approval.
-      </p>
-    </section>
-  );
-}
-
-function EvidenceDrawer({
-  result,
+function FindingDrawer({
+  finding,
+  evidence,
+  run,
+  repositories,
+  loading,
+  error,
   close,
 }: {
-  result: ImpactResult;
+  finding: ImpactFinding | null;
+  evidence: ImpactEvidence[];
+  run: ImpactRun | null;
+  repositories: ProjectRepository[];
+  loading: boolean;
+  error: string;
   close: () => void;
 }) {
+  const [tab, setTab] = useState("SOURCE_CODE");
+  const evidenceTypes = Array.from(new Set(evidence.map((item) => item.type)));
+  useEffect(() => {
+    if (evidenceTypes.length && !evidenceTypes.includes(tab))
+      setTab(evidenceTypes[0]);
+  }, [evidenceTypes, tab]);
   return (
-    <div className="impact-drawer-backdrop" onMouseDown={close}>
+    <div
+      className="impact-drawer-backdrop"
+      role="presentation"
+      onMouseDown={close}
+    >
       <aside
-        className="impact-drawer"
+        className="impact-drawer impact-evidence-drawer"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="evidence-title"
+        aria-label="Impact finding details"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header>
           <div>
-            <span className="eyebrow">TRACEABLE EVIDENCE</span>
-            <h2 id="evidence-title">{result.key}</h2>
-            <p>{result.name}</p>
+            <span className="eyebrow">FINDING DETAILS</span>
+            <h2>{finding?.requirement || "Loading finding"}</h2>
+            {finding && <StatusBadge status={finding.status} />}
           </div>
-          <button onClick={close} aria-label="Close evidence panel">
+          <button onClick={close} aria-label="Close finding details">
             <X />
           </button>
         </header>
-        <section className="evidence-scores">
-          {[
-            [
-              "Impact score",
-              result.impactScore ?? "Unknown",
-              result.impactLevel,
-            ],
-            [
-              "Delivery risk",
-              result.deliveryRisk ?? "Unknown",
-              result.riskLevel,
-            ],
-            [
-              "Correlation",
-              `${Math.round(result.correlationConfidence * 100)}%`,
-              result.reviewState,
-            ],
-          ].map(([name, value, note]) => (
-            <div key={name}>
-              <span>{name}</span>
-              <strong>{value}</strong>
-              <small>{label(String(note))}</small>
+        {loading ? (
+          <ImpactState
+            title="Loading finding evidence"
+            text="Loading persisted detail and exact evidence references."
+            loading
+          />
+        ) : error ? (
+          <InlineError message={error} />
+        ) : finding ? (
+          <>
+            <div className="impact-detail-grid">
+              <Detail label="What should exist" value={finding.requirement} />
+              <Detail label="What is present" value={finding.what_present} />
+              <Detail label="What is missing" value={finding.what_missing} />
+              <Detail
+                label="Technical reason"
+                value={finding.technical_reason}
+              />
+              <Detail label="Explanation" value={finding.explanation} />
+              <Detail label="Impact" value={finding.impact} />
+              <Detail label="Recommendation" value={finding.recommendation} />
             </div>
-          ))}
-        </section>
-        <section className="evidence-section">
-          <h3>Scoring factors</h3>
-          {result.factors.length ? (
-            result.factors.map((factor) => (
-              <div className="factor-row" key={factor.label}>
-                <span>
-                  <b>{factor.label}</b>
-                  <small>{factor.contribution}% weight</small>
-                </span>
-                <i>
-                  <b style={{ width: `${factor.value}%` }} />
-                </i>
-                <strong>{factor.value}</strong>
-              </div>
-            ))
-          ) : (
-            <p>
-              Scoring is withheld until defensible architecture evidence exists.
-            </p>
-          )}
-        </section>
-        <section className="evidence-section">
-          <h3>Evidence bundle</h3>
-          {result.evidence.length ? (
-            result.evidence.map((evidence) => (
-              <EvidenceCard evidence={evidence} key={evidence.id} />
-            ))
-          ) : (
-            <p className="evidence-empty">
-              <AlertCircle /> No approved mapping is available. This is Unknown,
-              not No Impact.
-            </p>
-          )}
-        </section>
-        <footer>
-          <span>
-            Recommended action <strong>{result.requiredAction}</strong>
-          </span>
-          <button onClick={close}>Done</button>
-        </footer>
+            <div className="impact-detail-metrics">
+              <span>
+                Confidence <b>{formatPercent(finding.confidence)}</b>
+              </span>
+              <span>
+                Completion <b>{formatPercent(finding.completion)}</b>
+              </span>
+              <span>
+                Score <b>{formatScore(finding.score_contribution)}</b>
+              </span>
+            </div>
+            <section className="impact-evidence-section">
+              <h3>Validated evidence</h3>
+              {evidenceTypes.length ? (
+                <>
+                  <div className="impact-evidence-tabs">
+                    {evidenceTypes.map((type) => (
+                      <button
+                        key={type}
+                        className={tab === type ? "active" : ""}
+                        onClick={() => setTab(type)}
+                      >
+                        {impactLabel(type)}
+                      </button>
+                    ))}
+                  </div>
+                  {evidence
+                    .filter((item) => item.type === tab)
+                    .map((item) => (
+                      <EvidenceCard key={item.evidence_id} item={item} />
+                    ))}
+                </>
+              ) : (
+                <p className="impact-empty-inline">
+                  No validated evidence is available. The backend finding status
+                  remains authoritative.
+                </p>
+              )}
+            </section>
+            {run ? (
+              <CopilotRemediationPanel
+                finding={finding}
+                run={run}
+                repositories={repositories}
+              />
+            ) : (
+              <p className="impact-empty-inline">Run context is unavailable for remediation.</p>
+            )}
+          </>
+        ) : null}
       </aside>
     </div>
   );
 }
 
-function EvidenceCard({ evidence }: { evidence: Evidence }) {
+function Detail({ label, value }: { label: string; value?: string | null }) {
   return (
-    <article className="evidence-card">
+    <div>
+      <h3>{label}</h3>
+      <p>{value || "Not provided by the analysis backend."}</p>
+    </div>
+  );
+}
+
+function EvidenceCard({ item }: { item: ImpactEvidence }) {
+  return (
+    <article className="impact-evidence-card">
       <div>
-        <FileSearch />
-        <span>
-          <strong>{evidence.sourceDocument}</strong>
-          <small>{evidence.id}</small>
-        </span>
-        <b>{Math.round(evidence.confidence * 100)}%</b>
+        <FileCode2 />
+        <strong>
+          {item.file_path || item.document_name || impactLabel(item.type)}
+        </strong>
+        {item.supports && <StatusBadge status={item.supports} />}
       </div>
+      <p>{item.description}</p>
       <dl>
-        {[
-          ["Page", evidence.page],
-          ["Component", evidence.component],
-          ["Relationship", evidence.relationship],
-          ["Planning record", evidence.planningRecord],
-          ["Method", evidence.method],
-          ["Analyzed", new Date(evidence.timestamp).toLocaleString()],
-        ].map(([name, value]) => (
-          <div key={name}>
-            <dt>{name}</dt>
-            <dd>{value}</dd>
-          </div>
-        ))}
+        {item.symbol && <Preview label="Symbol" value={item.symbol} />}
+        {(item.start_line || item.end_line) && (
+          <Preview
+            label="Lines"
+            value={`${item.start_line || "?"}–${item.end_line || "?"}`}
+          />
+        )}
+        {item.section && <Preview label="Section" value={item.section} />}
+        {item.commit_sha && <Preview label="Commit" value={item.commit_sha} />}
+        {item.retrieval_method && (
+          <Preview
+            label="Retrieved by"
+            value={impactLabel(item.retrieval_method)}
+          />
+        )}
       </dl>
     </article>
   );
 }
 
-function FilterSelect({
-  name,
-  value,
-  values,
-  set,
-}: {
-  name: string;
-  value: string;
-  values: readonly string[];
-  set: (value: string) => void;
-}) {
+function StatusBadge({ status }: { status: ImpactStatus }) {
   return (
-    <label className="impact-filter-select">
-      <span>{name}</span>
-      <select
-        aria-label={`Filter by ${name}`}
-        value={value}
-        onChange={(event) => set(event.target.value)}
-      >
-        <option value="">All</option>
-        {values.map((option) => (
-          <option key={option} value={option}>
-            {label(option)}
-          </option>
-        ))}
-      </select>
-    </label>
+    <span className={`impact-status ${status.toLowerCase()}`}>
+      {impactLabel(status)}
+    </span>
   );
 }
 
-function SectionHead({
+function SectionHeading({
   eyebrow,
   title,
-  note,
-  icon,
+  aside,
 }: {
   eyebrow: string;
   title: string;
-  note?: string;
-  icon?: React.ReactNode;
+  aside?: React.ReactNode;
 }) {
   return (
     <div className="impact-section-head">
@@ -1071,50 +1443,35 @@ function SectionHead({
         <span className="eyebrow">{eyebrow}</span>
         <h2>{title}</h2>
       </div>
-      {icon || <span>{note}</span>}
+      {aside && <span>{aside}</span>}
     </div>
   );
 }
-function Badge({ level }: { level: ImpactLevel }) {
+
+function InlineError({ message }: { message: string }) {
   return (
-    <span className={`level-badge ${level.toLowerCase()}`}>
-      <i /> {label(level)}
-    </span>
+    <div className="impact-inline-error" role="alert">
+      <AlertCircle /> {message}
+    </div>
   );
 }
-function State({
-  icon,
+
+function ImpactState({
   title,
   text,
-  action,
-  onAction,
-  error,
+  loading = false,
 }: {
-  icon: React.ReactNode;
   title: string;
   text: string;
-  action?: string;
-  onAction?: () => void;
-  error?: boolean;
+  loading?: boolean;
 }) {
   return (
-    <section className={`card impact-state ${error ? "error" : ""}`}>
-      {icon}
+    <section className="card impact-state">
+      {loading ? <LoaderCircle className="spin" /> : <AlertCircle />}
       <div>
         <h2>{title}</h2>
         <p>{text}</p>
-        {action && <button onClick={onAction}>{action}</button>}
       </div>
     </section>
-  );
-}
-function Loading() {
-  return (
-    <div className="impact-loading" aria-label="Loading impact analysis">
-      <div className="skeleton" />
-      <div className="skeleton" />
-      <div className="skeleton" />
-      <div className="skeleton wide" />
-    </div>
   );
 }

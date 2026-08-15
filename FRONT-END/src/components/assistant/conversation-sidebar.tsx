@@ -1,5 +1,6 @@
 import { MessageSquarePlus, Search, Trash2, X } from "lucide-react";
 import type { Conversation } from "./assistant-types";
+import { conversationTitle } from "./conversation-title";
 
 export function ConversationSidebar({
   groups,
@@ -75,22 +76,15 @@ export function ConversationSidebar({
                     onClick={() => onOpen(item)}
                     title={item.title}
                   >
-                    <strong>{item.title}</strong>
-                    <span>{item.last_message_preview || projectName}</span>
-                    <footer>
-                      <small>
-                        {item.current_intent?.replaceAll("_", " ") ||
-                          "Project chat"}
-                      </small>
-                      {item.updated_at && (
-                        <time>
-                          {new Date(item.updated_at).toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </time>
-                      )}
-                    </footer>
+                    <strong>{conversationTitle(item.title)}</strong>
+                    {item.updated_at && (
+                      <time>
+                        {new Date(item.updated_at).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </time>
+                    )}
                   </button>
                   <button
                     className="conversation-delete"

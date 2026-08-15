@@ -38,7 +38,7 @@ function Inline({
                 onClick={() => onCitation(sourceIndex)}
                 aria-label={`Open citation ${sourceIndex + 1}: ${sources[sourceIndex].source_key || sources[sourceIndex].title}`}
               >
-                {part}
+                {Number.isInteger(numeric) ? part : `${bracket[1]} ↗`}
               </button>
             );
         }

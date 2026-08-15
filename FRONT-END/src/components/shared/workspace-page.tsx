@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useWorkspaceContext } from "@/workspace-context";
+import { useEffect } from "react";
 type Config = {
   title: string;
   eyebrow: string;
@@ -85,14 +86,58 @@ export function WorkspacePage({ section }: { section: string }) {
     environmentId = useWorkspaceContext((s) => s.environmentId);
   const [query, setQuery] = useState(""),
     [connectOpen, setConnectOpen] = useState(false);
+  const [graphStatus, setGraphStatus] = useState<
+    "checking" | "healthy" | "unavailable"
+  >("checking");
+  useEffect(() => {
+    if (section !== "data-sources") return;
+    const controller = new AbortController();
+    setGraphStatus("checking");
+    void fetch("/api/graph/health", {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((response) =>
+        setGraphStatus(response.ok ? "healthy" : "unavailable"),
+      )
+      .catch(() => {
+        if (!controller.signal.aborted) setGraphStatus("unavailable");
+      });
+    return () => controller.abort();
+  }, [section]);
+  const displayStats =
+    section === "data-sources"
+      ? [
+          ["Connected", graphStatus === "healthy" ? "5" : "4", "5 categories"],
+          [
+            "Healthy",
+            graphStatus === "healthy" ? "4" : "3",
+            graphStatus === "healthy" ? "80%" : "60%",
+          ],
+          config.stats[2],
+        ]
+      : config.stats;
+  const displayItems =
+    section === "data-sources"
+      ? [
+          ...config.items,
+          `Graph Analysis · ${
+            graphStatus === "checking"
+              ? "Checking connection"
+              : graphStatus === "healthy"
+                ? "Healthy"
+                : "Setup required"
+          }`,
+        ]
+      : config.items;
   const router = useRouter();
   const openSource = (index: number) => {
-    const route = [
-      "github",
-      "project-management",
-      "knowledge-base",
-      "impact-analysis",
-    ][index];
+    const route =
+      index === 4
+        ? "graph-analysis"
+        : ["github", "project-management", "knowledge-base", "impact-analysis"][
+            index
+          ];
     const params = new URLSearchParams();
     if (spaceId) params.set("productSpaceId", spaceId);
     if (projectId) params.set("projectId", projectId);
@@ -117,7 +162,7 @@ export function WorkspacePage({ section }: { section: string }) {
         </button>
       </div>
       <section className="workspace-stats">
-        {config.stats.map(([label, value, note], i) => (
+        {displayStats.map(([label, value, note], i) => (
           <article className="card" key={label}>
             <span>
               {i === 0 ? (
@@ -152,7 +197,7 @@ export function WorkspacePage({ section }: { section: string }) {
           </button>
         </div>
         <div className="workspace-list">
-          {config.items
+          {displayItems
             .filter((x) => x.toLowerCase().includes(query.toLowerCase()))
             .map((item, i) => {
               const [name, status] = item.split(" · ");
@@ -216,25 +261,27 @@ export function WorkspacePage({ section }: { section: string }) {
               "Project Management Tool",
               "Knowledge Base",
               "Impact Analysis",
-            ].map((name, i) => (
-              <button
-                className="connector-option"
-                key={name}
-                onClick={() => {
-                  setConnectOpen(false);
-                  openSource(i);
-                }}
-              >
-                <Database />
-                <span>
-                  <strong>{name}</strong>
-                  <small>
-                    Configure for the selected Product Space and Project
-                  </small>
-                </span>
-                <ArrowRight />
-              </button>
-            ))}
+            ]
+              .concat("Graph Analysis")
+              .map((name, i) => (
+                <button
+                  className="connector-option"
+                  key={name}
+                  onClick={() => {
+                    setConnectOpen(false);
+                    openSource(i);
+                  }}
+                >
+                  <Database />
+                  <span>
+                    <strong>{name}</strong>
+                    <small>
+                      Configure for the selected Product Space and Project
+                    </small>
+                  </span>
+                  <ArrowRight />
+                </button>
+              ))}
           </section>
         </div>
       )}

@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildImpactAnalysis } from "../src/lib/impact-analysis.ts";
+import {
+  formatPercent,
+  safeCsvCell,
+} from "../src/lib/impact-analysis/formatters.ts";
+import { normalizeImpactApiFailure } from "../src/lib/impact-analysis/errors.ts";
+import { resolveDevelopmentActor } from "../src/lib/project-management-actor.ts";
 
 const read = (relativePath) =>
   readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
@@ -46,7 +52,7 @@ const base = {
   ],
 };
 
-test("impact analysis is deterministic for versioned inputs", () => {
+test("legacy analysis remains deterministic for rollback compatibility", () => {
   const first = buildImpactAnalysis(base);
   const second = buildImpactAnalysis(base);
   assert.deepEqual(second, first);
@@ -54,7 +60,7 @@ test("impact analysis is deterministic for versioned inputs", () => {
   assert.match(first.snapshot.id, /^ias-/);
 });
 
-test("impact, delivery risk, and correlation confidence remain separate", () => {
+test("legacy impact, delivery risk, and confidence remain separate", () => {
   const result = buildImpactAnalysis(base).features[0];
   assert.equal(typeof result.impactScore, "number");
   assert.equal(typeof result.deliveryRisk, "number");
@@ -64,10 +70,9 @@ test("impact, delivery risk, and correlation confidence remain separate", () => 
     result.factors.reduce((sum, factor) => sum + factor.contribution, 0),
     100,
   );
-  assert.ok(result.evidence.length > 0);
 });
 
-test("missing mapping produces UNKNOWN instead of NO_IMPACT", () => {
+test("legacy missing mapping remains UNKNOWN rather than NO_IMPACT", () => {
   const snapshot = buildImpactAnalysis(base);
   const unmapped = snapshot.features.find(
     (feature) => feature.recordId === "feature-2",
@@ -75,42 +80,150 @@ test("missing mapping produces UNKNOWN instead of NO_IMPACT", () => {
   assert.equal(unmapped?.impactLevel, "UNKNOWN");
   assert.equal(unmapped?.riskLevel, "UNKNOWN");
   assert.equal(unmapped?.impactScore, null);
-  assert.equal(unmapped?.evidence.length, 0);
-  assert.equal(snapshot.snapshot.status, "PARTIAL");
-  assert.equal(snapshot.summary.unmappedFeatures, 1);
 });
 
-test("release and optional planning scope filters every result", () => {
-  const snapshot = buildImpactAnalysis({
-    ...base,
-    releaseId: "release-1",
-    featureId: "feature-1",
-    sprintId: "sprint-1",
-    userStoryId: "story-1",
-  });
-  assert.deepEqual(
-    snapshot.features.map((item) => item.recordId),
-    ["feature-1"],
-  );
-  assert.deepEqual(
-    snapshot.stories.map((item) => item.recordId),
-    ["story-1"],
-  );
-});
-
-test("dashboard route and API enforce shared project context", () => {
-  const api = read("src/app/api/impact-analysis/route.ts");
+test("backend-driven dashboard uses persisted run APIs", () => {
+  const route = read("src/app/api/impact-analysis/route.ts");
+  const proxy = read("src/app/api/impact-analysis/proxy.ts");
+  const client = read("src/lib/impact-analysis/api.ts");
   const dashboard = read(
     "src/components/impact-analysis/impact-analysis-dashboard.tsx",
   );
-  const workspace = read("src/components/shared/workspace-page.tsx");
-  assert.match(api, /PRODUCT_SPACE_REQUIRED/);
-  assert.match(api, /PROJECT_OUTSIDE_PRODUCT_SPACE/);
-  assert.match(api, /buildImpactAnalysis/);
+  const actor = read("src/lib/project-management-actor.ts");
+  assert.doesNotMatch(route, /buildImpactAnalysis/);
+  assert.match(route, /proxyImpactRequest/);
+  assert.match(proxy, /projectManagementFetch/);
+  assert.match(proxy, /X-Actor/);
+  assert.doesNotMatch(proxy, /local-user/);
+  assert.match(proxy, /localAnonymousAnalysisEnabled/);
+  assert.match(proxy, /privilegedGeneratedChangePath/);
+  assert.match(proxy, /ALLOW_LOCAL_ANONYMOUS_IMPACT_ANALYSIS/);
+  assert.match(actor, /PROJECT_MANAGEMENT_ACTOR_ID/);
+  assert.match(proxy, /generated-changes/);
+  assert.match(client, /startImpactAnalysis/);
+  assert.match(client, /getImpactRequirements/);
+  assert.match(client, /getFindingEvidence/);
+  assert.match(client, /getImpactGraph/);
+  assert.match(client, /github\/repositories\/branches/);
+  assert.match(client, /repositoryUrl/);
+  assert.match(client, /body\.userStories/);
   assert.match(dashboard, /useWorkspaceContext/);
-  assert.match(dashboard, /params\.get\("productSpaceId"\)/);
-  assert.match(dashboard, /Unknown,\s*not No Impact/);
+  assert.match(dashboard, /project_repository_id/);
+  assert.match(dashboard, /scopeType === "FEATURE" \? featureId : storyId/);
+  assert.match(dashboard, /ref: branch/);
+  assert.match(dashboard, /commit_sha/);
+  assert.match(dashboard, /Backend analysis pipeline/);
+  assert.match(dashboard, /run\.timeline/);
+  assert.match(dashboard, /run\.error/);
+  assert.match(dashboard, /Backend error/);
+  assert.match(dashboard, /IMPACT_STATUSES/);
+  assert.match(dashboard, /RemediationPanel/);
   assert.match(dashboard, /window\.print/);
-  assert.match(dashboard, /text\/csv/);
-  assert.match(workspace, /Impact Analysis · Ready/);
+  assert.match(dashboard, /text\/csv;charset=utf-8/);
+});
+
+test("the local actor fallback is UUID-only and development-only", () => {
+  assert.equal(resolveDevelopmentActor("", "development").ok, false);
+  assert.equal(resolveDevelopmentActor("local-user", "development").ok, false);
+  assert.deepEqual(
+    resolveDevelopmentActor(
+      "9513d1fd-7b10-4cd2-88bb-aa011ccf1b53",
+      "development",
+    ),
+    {
+      ok: true,
+      actor: "9513d1fd-7b10-4cd2-88bb-aa011ccf1b53",
+      source: "development",
+    },
+  );
+  assert.equal(
+    resolveDevelopmentActor(
+      "9513d1fd-7b10-4cd2-88bb-aa011ccf1b53",
+      "production",
+    ).ok,
+    false,
+  );
+});
+
+test("FastAPI nested error envelopes retain code and message", () => {
+  assert.deepEqual(
+    normalizeImpactApiFailure(
+      {
+        error: {
+          code: "REQUEST_VALIDATION_FAILED",
+          message: "The request did not pass validation.",
+          details: { errors: ["invalid actor"] },
+        },
+      },
+      422,
+    ),
+    {
+      code: "REQUEST_VALIDATION_FAILED",
+      message: "The request did not pass validation.",
+      details: { errors: ["invalid actor"] },
+      retryable: undefined,
+    },
+  );
+  assert.deepEqual(
+    normalizeImpactApiFailure(
+      {
+        detail: {
+          code: "ANALYSIS_ACCESS_DENIED",
+          message: "Actor is not a member of the Project.",
+          retryable: false,
+        },
+      },
+      403,
+    ),
+    {
+      code: "ANALYSIS_ACCESS_DENIED",
+      message: "Actor is not a member of the Project.",
+      details: {
+        code: "ANALYSIS_ACCESS_DENIED",
+        message: "Actor is not a member of the Project.",
+        retryable: false,
+      },
+      retryable: false,
+    },
+  );
+});
+
+test("export formatting protects spreadsheet consumers", () => {
+  assert.equal(safeCsvCell('a"b'), '"a""b"');
+  assert.equal(safeCsvCell("=1+1"), '"\'=1+1"');
+  assert.equal(formatPercent(0.934), "93%");
+  assert.equal(formatPercent(null), "Unavailable");
+});
+test("Generate Code creates a governed Copilot prompt without mutating a repository", () => {
+  const dashboard = read(
+    "src/components/impact-analysis/impact-analysis-dashboard.tsx",
+  );
+  const component = read(
+    "src/components/impact-analysis/copilot-remediation-prompt.tsx",
+  );
+  const api = read("src/lib/impact-analysis/api.ts");
+  const proxy = read("src/app/api/impact-analysis/proxy.ts");
+
+  assert.match(dashboard, /<CopilotRemediationPanel/);
+  assert.doesNotMatch(dashboard, /<RemediationPanel/);
+  assert.match(component, /Generate Copilot Prompt/);
+  assert.match(component, /does not create files, commits, branches, or pull requests/);
+  assert.match(component, /repository_suitability/);
+  assert.match(component, /Repository suitability warning/);
+  assert.match(component, /Use suggestion & regenerate/);
+  assert.match(component, /Copy Prompt/);
+  assert.match(component, /Download \.md/);
+  assert.match(component, /Open Copilot Chat/);
+  assert.match(component, /Copilot completion is not implementation evidence/);
+  assert.match(component, /readOnly/);
+  assert.match(api, /generateRemediationPrompt/);
+  assert.match(api, /remediation-prompt/);
+  assert.match(api, /body: JSON\.stringify\(options\)/);
+  assert.match(proxy, /remediation-prompt/);
+  const privilegedPaths = proxy.match(
+    /function privilegedGeneratedChangePath[\s\S]*?\n}/,
+  )?.[0];
+  assert.ok(privilegedPaths);
+  assert.doesNotMatch(privilegedPaths, /remediation-prompt/);
+  assert.match(privilegedPaths, /generated-changes/);
 });

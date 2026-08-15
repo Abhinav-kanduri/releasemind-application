@@ -85,10 +85,12 @@ export function EvidencePanel({
   sources,
   onClose,
   highlighted,
+  retrievalLabel,
 }: {
   sources: Source[];
   onClose: () => void;
   highlighted: number | null;
+  retrievalLabel: string;
 }) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set()),
     showScores = hasMeaningfulScores(sources.map((source) => source.score));
@@ -102,10 +104,10 @@ export function EvidencePanel({
     <aside className="evidence-panel" aria-label="Evidence and citations">
       <header>
         <div>
-          <h2>Evidence</h2>
+          <h2>Sources &amp; Evidence</h2>
           <p>{sources.length} sources used in this answer</p>
         </div>
-        <button onClick={onClose} aria-label="Collapse evidence panel">
+        <button onClick={onClose} aria-label="Close Sources and Evidence">
           <ChevronLeft />
           <X />
         </button>
@@ -113,7 +115,7 @@ export function EvidencePanel({
       <div className="evidence-ok">
         <CheckCircle2 />
         <span>
-          <b>Structured Project retrieval</b>
+          <b>{retrievalLabel}</b>
           <small>{sources.length} records found</small>
         </span>
       </div>

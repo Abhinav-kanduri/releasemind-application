@@ -1,48 +1,28 @@
-import {
-  ArrowUpRight,
-  BookOpen,
-  GitCompare,
-  Layers3,
-  ListChecks,
-  ShieldAlert,
-  Sparkles,
-} from "lucide-react";
+import { Sparkles } from "lucide-react";
 const prompts = [
   {
-    title: "Summarize the current backlog",
-    detail: "Releases, Features, Stories, points, and status",
-    icon: Layers3,
-    question: "Summarize the current Project backlog",
+    title: "Executive summary",
+    question: "Give me an executive summary for the current release",
   },
   {
-    title: "Show active PI Features",
-    detail: "Explore work planned for the active release",
-    icon: BookOpen,
+    title: "Active PI features",
     question: "Show Features in the active PI Release",
   },
   {
-    title: "Find work in progress",
-    detail: "Review User Stories currently being delivered",
-    icon: ListChecks,
+    title: "Work in progress",
     question: "Which User Stories are currently in progress?",
   },
   {
-    title: "Explain Acceptance Criteria",
-    detail: "Inspect expected behavior for CSA-BOT-F-001",
-    icon: Sparkles,
+    title: "Acceptance criteria",
     question: "Explain the Acceptance Criteria for CSA-BOT-F-001",
   },
   {
-    title: "Review delivery risks",
-    detail: "Surface dependencies, risks, and assumptions",
-    icon: ShieldAlert,
+    title: "What's at risk?",
     question: "Show delivery risks for the current Project",
   },
   {
-    title: "Compare supporting knowledge",
-    detail: "Trace a Feature to connected documents",
-    icon: GitCompare,
-    question: "Compare a Feature with its supporting documents",
+    title: "Release readiness",
+    question: "Assess release readiness for the current Project",
   },
 ];
 export function WelcomeState({
@@ -59,20 +39,19 @@ export function WelcomeState({
       </span>
       <h2>Ask ReleaseLens</h2>
       <p>
-        Explore Releases, Features, User Stories, Acceptance Criteria, backlog
-        status, and connected knowledge for {projectName}.
+        What do you want to understand about <strong>{projectName}</strong>?
       </p>
-      <div className="suggested">
-        {prompts.map(({ title, detail, icon: Icon, question }) => (
+      <div className="suggested" aria-label="Suggested questions">
+        {prompts.map(({ title, question }) => (
           <button key={question} onClick={() => onAsk(question)}>
-            <Icon />
-            <span>
-              <b>{title}</b>
-              <small>{detail}</small>
-            </span>
-            <ArrowUpRight />
+            {title}
           </button>
         ))}
+      </div>
+      <div className="welcome-examples">
+        <span>Try asking</span>
+        <button onClick={() => onAsk("Compare planned work with GitHub implementation")}>Compare planned work with GitHub implementation</button>
+        <button onClick={() => onAsk("Which user stories have incomplete acceptance criteria?")}>Find stories with incomplete acceptance criteria</button>
       </div>
     </section>
   );

@@ -3,18 +3,21 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/start-dev.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/assistant-sanitizer.test.mjs tests/assistant-ui-contract.test.mjs tests/workspace-context.test.mjs tests/knowledge-base-contract.test.mjs tests/impact-analysis.test.mjs tests/dashboard-health.test.mjs",
+    "test": "node --experimental-strip-types --test tests/assistant-sanitizer.test.mjs tests/assistant-ui-contract.test.mjs tests/workspace-context.test.mjs tests/knowledge-base-contract.test.mjs tests/impact-analysis.test.mjs tests/rag-validation-contract.test.mjs tests/github-summary-export.test.mjs tests/dashboard-health.test.mjs tests/graph-analysis-contract.test.mjs",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
     "@prisma/client": "^6.19.0",
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.112.2",
+    "jspdf": "^3.0.4",
     "lucide-react": "^0.468.0",
     "next": "^15.5.20",
     "react": "^19.0.0",

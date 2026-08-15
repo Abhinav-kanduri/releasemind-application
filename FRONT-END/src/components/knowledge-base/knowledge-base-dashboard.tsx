@@ -69,7 +69,18 @@ function responseMessage(payload: unknown, fallback: string) {
     if (typeof message === "string") return message;
   }
   if (typeof body.error === "string") return body.error;
+  if (typeof body.message === "string") return body.message;
   return fallback;
+}
+
+async function readResponsePayload(response: Response, fallback: string) {
+  const raw = await response.text();
+  if (!raw) throw new Error(fallback);
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(fallback);
+  }
 }
 
 function formatBytes(bytes: number) {
@@ -127,8 +138,14 @@ export function KnowledgeBaseDashboard({ project }: { project: string }) {
           }),
         ]);
         const [documentsBody, statsBody] = await Promise.all([
-          documentsResponse.json(),
-          statsResponse.json(),
+          readResponsePayload(
+            documentsResponse,
+            "Documents could not be loaded.",
+          ),
+          readResponsePayload(
+            statsResponse,
+            "Knowledge Base stats could not load.",
+          ),
         ]);
         if (!documentsResponse.ok)
           throw new Error(
@@ -138,8 +155,11 @@ export function KnowledgeBaseDashboard({ project }: { project: string }) {
           throw new Error(
             responseMessage(statsBody, "Knowledge Base stats could not load."),
           );
-        setDocuments(documentsBody.items || []);
-        setStats(statsBody);
+        const documentPayload = documentsBody as
+          | { items?: KnowledgeDocument[] }
+          | null;
+        setDocuments(documentPayload?.items || []);
+        setStats(statsBody as KnowledgeStats);
         setError("");
       } catch (cause) {
         setError(
@@ -185,7 +205,10 @@ export function KnowledgeBaseDashboard({ project }: { project: string }) {
           `/api/knowledge-base/documents?${scopeQuery}`,
           { method: "POST", body: formData },
         );
-        const payload = await response.json();
+        const payload = await readResponsePayload(
+          response,
+          `Could not upload ${file.name}.`,
+        );
         if (!response.ok)
           throw new Error(
             responseMessage(payload, `Could not upload ${file.name}.`),
@@ -209,7 +232,10 @@ export function KnowledgeBaseDashboard({ project }: { project: string }) {
         `/api/knowledge-base/documents/${encodeURIComponent(document.doc_id)}/retry?${scopeQuery}`,
         { method: "POST" },
       );
-      const payload = await response.json();
+      const payload = await readResponsePayload(
+        response,
+        "Retry could not start.",
+      );
       if (!response.ok)
         throw new Error(responseMessage(payload, "Retry could not start."));
       await load(true);
@@ -234,9 +260,14 @@ export function KnowledgeBaseDashboard({ project }: { project: string }) {
         `/api/knowledge-base/documents/${encodeURIComponent(document.doc_id)}?${scopeQuery}`,
         { method: "DELETE" },
       );
-      const payload = await response.json();
+      const payload = await readResponsePayload(
+        response,
+        "Document could not be deleted.",
+      );
       if (!response.ok)
-        throw new Error(responseMessage(payload, "Document could not delete."));
+        throw new Error(
+          responseMessage(payload, "Document could not be deleted."),
+        );
       await load(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Delete failed.");
